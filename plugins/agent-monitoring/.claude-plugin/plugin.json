@@ -1,6 +1,6 @@
 {
   "name": "agent-monitoring",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Monitor subagent Claude Code yang sedang running via dashboard web lokal, webhook, socket.io, atau SSE stream",
   "author": {
     "name": "agentmonitoring"

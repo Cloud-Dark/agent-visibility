@@ -39,7 +39,7 @@ const DEFAULT_TRANSPORTS = { webhook: true, sse: true, socketio: true };
 
 function loadState() {
   try {
-    const raw = fs.readFileSync(stateFile(), "utf8");
+    const raw = fs.readFileSync(stateFile(), "utf8").replace(/^﻿/, ""); // tolerate BOM from editors/PowerShell
     const s = JSON.parse(raw);
     if (!s.agents) s.agents = {};
     if (!Array.isArray(s.events)) s.events = [];

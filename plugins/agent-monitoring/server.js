@@ -181,6 +181,13 @@ button{padding:8px 14px;border-radius:8px;border:1px solid GrayText;cursor:point
 #yolo.on{background:#dc2626;color:#fff;border-color:#dc2626}
 #chatmeta{font-size:12px;opacity:.65;margin-top:6px}
 #streambox{border:1px solid GrayText;border-radius:10px;padding:10px;height:140px;overflow:auto;font-size:12px}
+.views{display:flex;gap:6px;margin:10px 0 4px}
+.views button.on{background:#4493f8;color:#fff;border-color:#4493f8}
+#pixelwrap{position:relative;display:none;margin-top:8px}
+#pixel{width:100%;image-rendering:pixelated;image-rendering:crisp-edges;border:2px solid #3b2f47;border-radius:6px;background:#cbb894;display:block}
+#pixeltip{position:absolute;display:none;max-width:270px;background:#1b1626;color:#f5f5f5;border:1px solid #7a6690;border-radius:6px;padding:8px 10px;font-size:12px;pointer-events:none;z-index:5}
+.legend{font-size:12px;opacity:.7;margin-top:6px}
+body.pixel-mode #agents{display:none}body.pixel-mode #pixelwrap{display:block}
 </style></head><body>
 <h1>&#129302; Claude Agent Monitor</h1>
 <div class="sub" id="meta">loading…</div>
@@ -194,7 +201,10 @@ button{padding:8px 14px;border-radius:8px;border:1px solid GrayText;cursor:point
 <div class="pills" id="transports"></div>
 <div class="mono" style="margin-bottom:8px">SSE: <span id="sse">/api/stream</span> · socket.io: <span id="sio">n/a</span></div>
 <h2>Agents (<span id="count">0</span>)</h2>
+<div class="views"><button type="button" id="v-text">Text</button><button type="button" id="v-pixel">Pixel office</button></div>
 <div class="grid" id="agents"></div>
+<div id="pixelwrap"><canvas id="pixel" width="320" height="200"></canvas><div id="pixeltip"></div>
+<div class="legend">Coding Lab: read/edit/think · Deploy Room: bash/build · Studio: web/content · Lounge: idle/done. Hover a worker for details.</div></div>
 <h2>Live stream</h2>
 <div id="streambox" class="mono"></div>
 <h2>Recent events</h2>
@@ -220,6 +230,7 @@ async function load(){
   transports=t.transports;
   $('meta').textContent='host '+a.server.host+' · port '+a.server.port+' · up since '+a.server.started_at+' · updated '+a.server.state_updated_at+((a.server.lan_ips||[]).map(ip=>' · Network: http://'+ip+':'+a.server.port).join(''));
   $('count').textContent=a.agents.length;
+  if(window.pixelOffice)window.pixelOffice.update(a.agents);
   const tp=$('transports');tp.innerHTML='';
   tp.append(pill('webhook','webhook'),pill('sse','SSE stream'),pill('socketio','socket.io'));
   $('sio').textContent=a.server.socketio?'enabled':'not installed';
@@ -268,6 +279,10 @@ async function loadApprovals(){try{const r=await (await fetch('/api/approvals?st
  $('approvals').innerHTML='';(r.approvals||[]).forEach(apprCard);renderYolo(r.yolo);}catch(e){}}
 loadApprovals();
 async function loadChatMeta(){try{const c=await (await fetch('/api/chat',{headers:chatHeaders})).json();$('chatmeta').textContent='cwd: '+c.cwd+' · mode: '+c.permission_mode+' · session: '+(c.session_id||'(new)');}catch(e){}}
+function setView(v){document.body.classList.toggle('pixel-mode',v==='pixel');$('v-text').classList.toggle('on',v!=='pixel');$('v-pixel').classList.toggle('on',v==='pixel');try{localStorage.setItem('agentmon-view',v);}catch(e){}}
+$('v-text').onclick=()=>setView('text');$('v-pixel').onclick=()=>setView('pixel');
+let savedView='pixel';try{savedView=localStorage.getItem('agentmon-view')||'pixel';}catch(e){}
+setView(savedView);
 load();setInterval(load,3000);
 try{
  const es=new EventSource('/api/stream');
@@ -287,7 +302,7 @@ try{
   const d=document.createElement('div');d.textContent=new Date().toLocaleTimeString()+' '+ev.data;$('streambox').prepend(d);};
  es.onerror=()=>{};
 }catch(e){}
-</script></body></html>`;
+</script><script src="/pixel.js"></script></body></html>`;
 
 const server = http.createServer(async (req, res) => {
   try {
@@ -300,6 +315,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === "GET" && u.pathname === "/") {
       return send(res, 200, "text/html; charset=utf-8", DASHBOARD);
+    }
+    if (req.method === "GET" && u.pathname === "/pixel.js") {
+      return send(res, 200, "text/javascript; charset=utf-8", require("fs").readFileSync(require("path").join(__dirname, "public", "pixel.js")));
     }
     if (req.method === "GET" && u.pathname === "/api/agents") {
       const agents = Object.values(s.agents).sort((a, b) =>

@@ -83,6 +83,19 @@ host 0.0.0.0 · port 9761 · up since … · Network: http://192.168.1.10:9761
 
 ---
 
+### 🎮 Pixel office
+
+Bagian **Agents** di dashboard bisa ditampilkan dalam dua mode: **Text** (kartu biasa) atau **Pixel office** (default). Pixel office adalah kantor pixel art 2D, dan setiap agent menjadi karakter yang berjalan ke ruangan sesuai pekerjaannya saat itu:
+
+| Ruangan | Isi | Agent masuk ke sini saat |
+|---------|-----|--------------------------|
+| Coding Lab | meja komputer, rak buku, whiteboard | tool terakhir Read, Edit, Write, Grep, Glob, Task, atau TodoWrite (berpikir, menulis kode) |
+| Deploy Room | rak server, monitor status, lampu BUILD/TEST/SHIP | tool terakhir Bash atau PowerShell |
+| Studio | green screen, kamera, ring light, lampu ON AIR | WebFetch, WebSearch, atau file media/konten |
+| Lounge | mesin kopi, teh, meja bundar, sofa | agent selesai, stale, atau tidak ada aktivitas lebih dari 45 detik |
+
+Gelembung di atas kepala menunjukkan status: titik-titik berarti sedang berpikir, prompt terminal berarti menjalankan perintah, ikon kamera berarti di studio, centang berarti selesai, dan zzz berarti idle. Arahkan kursor ke karakter untuk melihat tipe agent, ID, dan empat aktivitas terakhirnya. Semua gambar dibuat dengan canvas (`public/pixel.js`), tanpa file gambar. Pilihan mode disimpan di browser.
+
 ## 🔌 3 koneksi (pilih sesukamu)
 
 Semua aktif secara default. Matikan/nnyalakan lewat pill di dashboard,
@@ -336,6 +349,7 @@ agent-visibility/
    └─ lib/
       ├─ store.js                          ← state.json, webhook POST, stdin JSON
       └─ chat.js                           ← Prompt API: run claude -p, approvals, YOLO
+   └─ public/pixel.js                       ← tampilan Pixel office (canvas 2D)
 ```
 
 ---

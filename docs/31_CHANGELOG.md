@@ -6,6 +6,7 @@
 ## Contents
 
 - [Unreleased](#unreleased)
+- [0.4.0](#040)
 - [0.3.0](#030)
 - [0.2.0](#020)
 - [0.1.0](#010)
@@ -15,6 +16,19 @@ This changelog follows Keep a Changelog format.
 ## Unreleased
 
 - None.
+
+## 0.4.0
+
+Date: 2026-10-07
+
+### Added
+
+- Pixel office view: a 2D pixel art office on canvas (public/pixel.js, served at /pixel.js). Agents walk between four rooms based on their latest activity: Coding Lab, Deploy Room, Studio, and Lounge. Status bubbles, a WORK/IDLE/DONE counter, and hover details are included.
+- Text / Pixel office toggle on the dashboard. The choice is stored in localStorage.
+
+### Fixed
+
+- loadState tolerates a UTF-8 BOM in state.json (for example after editing with PowerShell 5.1), instead of falling back to an empty state.
 
 ## 0.3.0
 
