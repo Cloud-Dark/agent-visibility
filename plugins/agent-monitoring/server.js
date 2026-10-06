@@ -12,6 +12,32 @@ const {
   saveState,
   loadServerInfo,
 } = require("./lib/store");
+const chat = require("./lib/chat");
+// Prompt endpoints run tools on this machine. Allowed from loopback
+// without a token; other hosts need AGENT_MONITOR_TOKEN, sent as
+// "Authorization: Bearer <token>" or "X-Monitor-Token: <token>".
+const CHAT_TOKEN = process.env.AGENT_MONITOR_TOKEN || "";
+function tokenMatches(given) {
+  if (!CHAT_TOKEN || typeof given !== "string") return false;
+  const a = Buffer.from(given);
+  const b = Buffer.from(CHAT_TOKEN);
+  return a.length === b.length && require("crypto").timingSafeEqual(a, b);
+}
+function chatAllowed(req) {
+  const ip = req.socket.remoteAddress || "";
+  if (ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1") return true;
+  const auth = req.headers.authorization || "";
+  const bearer = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  return tokenMatches(bearer) || tokenMatches(req.headers["x-monitor-token"]);
+}
+const FORBIDDEN = { error: "prompt API is localhost-only; set AGENT_MONITOR_TOKEN and send Authorization: Bearer <token>" };
+
+function promptText(body) {
+  const text = typeof body.prompt === "string" ? body.prompt : typeof body.text === "string" ? body.text : "";
+  if (!text.trim()) return { error: "prompt is required" };
+  if (text.length > 20000) return { error: "prompt too long (max 20000 chars)" };
+  return { text: text.trim() };
+}
 
 const MONITOR_ID = "claude-agent-monitor";
 const PORT = Number(process.env.AGENT_MONITOR_PORT || DEFAULT_PORT);
@@ -141,10 +167,29 @@ button{padding:8px 14px;border-radius:8px;border:1px solid GrayText;cursor:point
 .pills{display:flex;gap:8px;margin:12px 0;flex-wrap:wrap}
 .pill{border:1px solid GrayText;border-radius:20px;padding:6px 12px;font-size:13px;cursor:pointer;background:none;color:inherit}
 .pill.on{background:#22c55e;color:#fff;border-color:#22c55e}
+#chatlog{border:1px solid GrayText;border-radius:10px;padding:10px;height:320px;overflow:auto;font-size:13px;display:flex;flex-direction:column;gap:6px}
+.msg{padding:6px 10px;border-radius:8px;white-space:pre-wrap;word-break:break-word;max-width:90%}
+.msg.user{align-self:flex-end;background:#2563eb;color:#fff}
+.msg.assistant{align-self:flex-start;border:1px solid GrayText}
+.msg.tool{align-self:flex-start;opacity:.7;font-family:ui-monospace,Consolas,monospace;font-size:12px}
+.msg.error{align-self:flex-start;color:#ef4444;font-family:ui-monospace,Consolas,monospace;font-size:12px}
+#chatform{margin-top:8px}
+#approvals{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+.appr{border:2px solid #f59e0b;border-radius:10px;padding:10px 12px;font-size:13px}
+.appr .cmd{font-family:ui-monospace,Consolas,monospace;font-size:12px;white-space:pre-wrap;word-break:break-all;background:rgba(127,127,127,.12);padding:6px 8px;border-radius:6px;margin:6px 0}
+.appr button{margin-right:6px}.ok{background:#16a34a;color:#fff;border-color:#16a34a}.no{background:#dc2626;color:#fff;border-color:#dc2626}
+#yolo.on{background:#dc2626;color:#fff;border-color:#dc2626}
+#chatmeta{font-size:12px;opacity:.65;margin-top:6px}
 #streambox{border:1px solid GrayText;border-radius:10px;padding:10px;height:140px;overflow:auto;font-size:12px}
 </style></head><body>
 <h1>&#129302; Claude Agent Monitor</h1>
 <div class="sub" id="meta">loading…</div>
+<h2>Prompt Claude Code</h2>
+<div id="chatlog"></div>
+<form id="chatform"><input id="prompt" placeholder="Tulis prompt, Enter untuk kirim" autocomplete="off" required>
+<button type="submit" id="sendbtn">Send</button><button type="button" id="newchat">New chat</button><button type="button" id="yolo" title="Auto-approve every tool call">YOLO: off</button></form>
+<div id="approvals"></div>
+<div id="chatmeta"></div>
 <h2>Connection</h2>
 <div class="pills" id="transports"></div>
 <div class="mono" style="margin-bottom:8px">SSE: <span id="sse">/api/stream</span> · socket.io: <span id="sio">n/a</span></div>
@@ -188,10 +233,58 @@ async function load(){
 $('addhook').onsubmit=async ev=>{ev.preventDefault();
  const r=await fetch('/api/webhooks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:$('url').value})});
  if(r.ok){$('url').value='';load();}else{$('err').textContent='invalid webhook url';}};
+const tokenParam=new URLSearchParams(location.search).get('token')||'';
+const chatHeaders={'Content-Type':'application/json','X-Monitor-Token':tokenParam};
+function addMsg(role,text){const d=document.createElement('div');d.className='msg '+role;d.textContent=text;$('chatlog').append(d);$('chatlog').scrollTop=$('chatlog').scrollHeight;}
+function setBusy(b){$('sendbtn').disabled=b;$('sendbtn').textContent=b?'Running…':'Send';}
+async function loadChat(){
+ try{const r=await fetch('/api/chat',{headers:chatHeaders});const c=await r.json();
+  if(!r.ok){$('chatmeta').textContent=c.error;$('prompt').disabled=true;return;}
+  $('chatlog').innerHTML='';c.messages.forEach(m=>addMsg(m.role,m.text));setBusy(c.busy);
+  $('chatmeta').textContent='cwd: '+c.cwd+' · mode: '+c.permission_mode+' · session: '+(c.session_id||'(new)');renderYolo(c.yolo);
+ }catch(e){$('chatmeta').textContent='chat unavailable: '+e.message;}
+}
+$('chatform').onsubmit=async ev=>{ev.preventDefault();const text=$('prompt').value.trim();if(!text)return;
+ setBusy(true);const r=await fetch('/api/chat',{method:'POST',headers:chatHeaders,body:JSON.stringify({text})});
+ if(r.ok){$('prompt').value='';}else{const e=await r.json();addMsg('error',e.error);setBusy(false);}};
+$('newchat').onclick=async()=>{await fetch('/api/chat',{method:'DELETE',headers:chatHeaders});loadChat();};
+loadChat();
+function renderYolo(on){const b=$('yolo');b.classList.toggle('on',on);b.textContent='YOLO: '+(on?'ON':'off');}
+$('yolo').onclick=async()=>{const on=!$('yolo').classList.contains('on');
+ if(on&&!confirm('YOLO mode: semua tool (Bash, git, edit file, dll) langsung diizinkan tanpa tanya. Lanjut?'))return;
+ const r=await (await fetch('/api/yolo',{method:'POST',headers:chatHeaders,body:JSON.stringify({yolo:on})})).json();renderYolo(r.yolo);};
+function apprCard(a){
+ if(document.getElementById('ap-'+a.id))return;
+ const d=document.createElement('div');d.className='appr';d.id='ap-'+a.id;
+ d.innerHTML='<b>Izin diminta:</b> '+esc(a.tool_name)+(a.source!=='dashboard'?' <span class="mono">(api run '+esc(String(a.run_id).slice(0,8))+')</span>':'')+'<div class="cmd">'+esc(a.summary)+'</div>';
+ const ok=document.createElement('button');ok.className='ok';ok.textContent='Approve';
+ const no=document.createElement('button');no.className='no';no.textContent='Reject';
+ const decide=async(v)=>{ok.disabled=no.disabled=true;await fetch('/api/approvals/'+a.id,{method:'POST',headers:chatHeaders,body:JSON.stringify({decision:v})});};
+ ok.onclick=()=>decide('allow');no.onclick=()=>decide('deny');
+ d.append(ok,no);$('approvals').append(d);}
+function apprDone(a){const d=document.getElementById('ap-'+a.id);if(d)d.remove();
+ if(a.source==='dashboard')addMsg(a.status==='allowed'?'tool':'error',(a.status==='allowed'?'✓ approved: ':'✕ rejected: ')+a.tool_name+' '+a.summary.slice(0,120));}
+async function loadApprovals(){try{const r=await (await fetch('/api/approvals?status=pending',{headers:chatHeaders})).json();
+ $('approvals').innerHTML='';(r.approvals||[]).forEach(apprCard);renderYolo(r.yolo);}catch(e){}}
+loadApprovals();
+async function loadChatMeta(){try{const c=await (await fetch('/api/chat',{headers:chatHeaders})).json();$('chatmeta').textContent='cwd: '+c.cwd+' · mode: '+c.permission_mode+' · session: '+(c.session_id||'(new)');}catch(e){}}
 load();setInterval(load,3000);
 try{
  const es=new EventSource('/api/stream');
- es.onmessage=ev=>{const d=document.createElement('div');d.textContent=new Date().toLocaleTimeString()+' '+ev.data;$('streambox').prepend(d);};
+ es.onmessage=ev=>{let p={};try{p=JSON.parse(ev.data);}catch(e){}
+  if(p.event==='approval.pending'){apprCard(p.approval);return;}
+  if(p.event==='approval.resolved'){apprDone(p.approval);return;}
+  if(p.event==='approval.auto'){if(p.approval.source==='dashboard')addMsg('tool','⚡ YOLO: '+p.approval.tool_name+' '+p.approval.summary.slice(0,120));return;}
+  if(p.event==='yolo'){renderYolo(p.yolo);return;}
+  if(p.event&&p.event.startsWith('chat.')){
+   if(p.source!=='dashboard'){const d=document.createElement('div');d.textContent=new Date().toLocaleTimeString()+' [api '+String(p.run_id).slice(0,8)+'] '+p.event+(p.text?' '+p.text.slice(0,120):'');$('streambox').prepend(d);return;}
+   if(p.event==='chat.user')addMsg('user',p.text);
+   else if(p.event==='chat.assistant')addMsg('assistant',p.text);
+   else if(p.event==='chat.tool')addMsg('tool','→ '+p.text);
+   else if(p.event==='chat.error')addMsg('error',p.text);
+   else if(p.event==='chat.done'){setBusy(false);loadChatMeta();}
+   return;}
+  const d=document.createElement('div');d.textContent=new Date().toLocaleTimeString()+' '+ev.data;$('streambox').prepend(d);};
  es.onerror=()=>{};
 }catch(e){}
 </script></body></html>`;
@@ -289,6 +382,93 @@ const server = http.createServer(async (req, res) => {
       s.webhooks = s.webhooks.filter((w) => w !== body.url);
       saveState(s);
       return json(res, 200, { webhooks: s.webhooks });
+    }
+    // Dashboard chat box: one conversation kept in state.json.
+    if (u.pathname === "/api/chat") {
+      if (!chatAllowed(req)) return json(res, 403, FORBIDDEN);
+      if (req.method === "GET") return json(res, 200, chat.status());
+      if (req.method === "DELETE") return json(res, 200, chat.reset());
+      if (req.method === "POST") {
+        const p = promptText(await readBody(req));
+        if (p.error) return json(res, 400, p);
+        try {
+          const run = chat.sendDashboard(p.text, broadcast);
+          return json(res, 202, { run_id: run.run_id });
+        } catch (e) {
+          return json(res, e.status || 500, { error: e.message });
+        }
+      }
+    }
+    // Permission approvals. approval-mcp.js (spawned by claude, on
+    // loopback) creates them; dashboard/API users approve or reject.
+    if (u.pathname === "/api/yolo") {
+      if (!chatAllowed(req)) return json(res, 403, FORBIDDEN);
+      if (req.method === "GET") return json(res, 200, { yolo: chat.getYolo() });
+      if (req.method === "POST") {
+        const body = await readBody(req);
+        return json(res, 200, chat.setYolo(body.yolo === true, broadcast));
+      }
+    }
+    if (u.pathname === "/api/approvals" || u.pathname.startsWith("/api/approvals/")) {
+      if (!chatAllowed(req)) return json(res, 403, FORBIDDEN);
+      const id = u.pathname.split("/")[3] || "";
+      if (!id && req.method === "GET") {
+        return json(res, 200, { yolo: chat.getYolo(), approvals: chat.listApprovals(u.searchParams.get("status") || undefined) });
+      }
+      try {
+        if (!id && req.method === "POST") {
+          return json(res, 201, chat.createApproval(await readBody(req)));
+        }
+        if (id && req.method === "GET") {
+          const waitMs = Math.min(Number(u.searchParams.get("wait_ms")) || 0, 60000);
+          const a = await chat.waitApproval(id, waitMs);
+          return a ? json(res, 200, a) : json(res, 404, { error: "unknown approval id" });
+        }
+        if (id && req.method === "POST") {
+          const body = await readBody(req);
+          if (body.decision !== "allow" && body.decision !== "deny") {
+            return json(res, 400, { error: 'decision must be "allow" or "deny"' });
+          }
+          const msg = typeof body.message === "string" ? body.message.slice(0, 500) : null;
+          return json(res, 200, chat.resolveApproval(id, body.decision === "allow" ? "allowed" : "denied", msg || (body.decision === "deny" ? "Rejected from agent-monitor dashboard" : null)));
+        }
+      } catch (e) {
+        return json(res, e.status || 500, { error: e.message });
+      }
+      return json(res, 405, { error: "method not allowed" });
+    }
+    // Prompt API for other apps. POST runs a prompt; pass session_id to
+    // continue a conversation, wait=true to get the answer in the response.
+    if (u.pathname === "/api/prompts" || u.pathname.startsWith("/api/prompts/")) {
+      if (!chatAllowed(req)) return json(res, 403, FORBIDDEN);
+      const runId = u.pathname.split("/")[3] || "";
+      if (req.method === "GET" && !runId) return json(res, 200, { runs: chat.listRuns() });
+      if (req.method === "POST" && !runId) {
+        const body = await readBody(req);
+        const p = promptText(body);
+        if (p.error) return json(res, 400, p);
+        let run;
+        try {
+          run = chat.startRun({ text: p.text, session_id: body.session_id, cwd: body.cwd }, broadcast);
+        } catch (e) {
+          return json(res, e.status || 500, { error: e.message });
+        }
+        const wait = body.wait === true || u.searchParams.get("wait") === "true";
+        if (!wait) return json(res, 202, run);
+        const timeoutMs = Math.min(Number(body.timeout_ms) || 300000, 600000);
+        const done = await chat.waitFor(run.run_id, timeoutMs);
+        return json(res, done.status === "running" ? 202 : 200, done);
+      }
+      if (runId) {
+        const run = chat.getRun(runId);
+        if (!run) return json(res, 404, { error: "unknown run_id (runs live in memory, max 50)" });
+        if (req.method === "GET") {
+          const waitMs = Math.min(Number(u.searchParams.get("wait_ms")) || 0, 600000);
+          return json(res, 200, waitMs ? await chat.waitFor(runId, waitMs) : run);
+        }
+        if (req.method === "DELETE") return json(res, 200, chat.cancel(runId));
+      }
+      return json(res, 405, { error: "method not allowed" });
     }
     return json(res, 404, { error: "not found" });
   } catch (err) {
