@@ -1,6 +1,6 @@
 ---
-name: agent-visibility
-description: Lihat status subagent yang sedang running via dashboard agent-visibility (port, jumlah running/done, aktivitas tiap agent). Dipakai saat user minta cek, lihat, atau monitor agent, atau saat memanggil /agent-visibility.
+name: status
+description: Lihat status subagent yang sedang running via dashboard agent-visibility (port, jumlah running/done, aktivitas tiap agent). Dipakai saat user minta cek, lihat, atau monitor agent, atau saat memanggil /agent-visibility:status.
 ---
 
 # Agent Visibility
