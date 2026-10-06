@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "agent-monitor": {
+      "command": "node",
+      "args": ["${PLUGIN_ROOT}/mcp-server.js"],
+      "env": {}
+    }
+  }
+}

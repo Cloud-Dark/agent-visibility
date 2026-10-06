@@ -1,0 +1,9 @@
+{
+  "name": "agent-monitoring",
+  "version": "0.2.0",
+  "description": "Claude Code agent monitoring plugin (server + MCP)",
+  "private": true,
+  "dependencies": {
+    "socket.io": "^4.8.1"
+  }
+}

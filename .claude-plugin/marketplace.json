@@ -1,0 +1,12 @@
+{
+  "name": "agentmonitoring",
+  "description": "Local marketplace: Claude agent monitoring plugin",
+  "owner": { "name": "agentmonitoring" },
+  "plugins": [
+    {
+      "name": "agent-monitoring",
+      "source": "./plugins/agent-monitoring",
+      "description": "Monitor subagent Claude Code via dashboard web, webhook, socket.io, atau SSE stream"
+    }
+  ]
+}
