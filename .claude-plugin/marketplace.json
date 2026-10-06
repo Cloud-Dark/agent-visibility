@@ -7,6 +7,11 @@
       "name": "agent-monitoring",
       "source": "./plugins/agent-monitoring",
       "description": "Monitor subagent Claude Code via dashboard web, webhook, socket.io, atau SSE stream"
+    },
+    {
+      "name": "agent-visibility",
+      "source": "./plugins/agent-visibility",
+      "description": "Slash skills /agent-visibility (cek agent running) dan /agent-visibility:multi-agent (spawn banyak agent paralel)"
     }
   ]
 }
