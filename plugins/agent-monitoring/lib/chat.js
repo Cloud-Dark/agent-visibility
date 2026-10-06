@@ -149,7 +149,7 @@ function startRun({ text, session_id, cwd, source = "api" }, emit) {
     cwd: dir,
     shell: process.platform === "win32",
     windowsHide: true,
-    env: { ...process.env, AGENT_MONITOR_RUN_ID: run.run_id, AGENT_MONITOR_PORT: String(process.env.AGENT_MONITOR_PORT || 9761) },
+    env: runEnv(run.run_id),
   });
   procs.set(run.run_id, child);
   child.stdin.on("error", () => {});
@@ -253,6 +253,22 @@ function cancel(runId) {
     child.kill("SIGTERM");
   }
   return run;
+}
+
+// The monitor server is started from inside a Claude Code session, so it
+// inherits that session's CLAUDECODE / CLAUDE_CODE_* / CLAUDE_PID vars.
+// A run must be its own top-level session, not a child of that one, or
+// it can pick up the parent's permission state. ANTHROPIC_* (model,
+// base URL, auth) are kept.
+function runEnv(runId) {
+  const env = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (k === "CLAUDECODE" || k === "CLAUDE_PID" || k.startsWith("CLAUDE_CODE_")) continue;
+    env[k] = v;
+  }
+  env.AGENT_MONITOR_RUN_ID = runId;
+  env.AGENT_MONITOR_PORT = String(process.env.AGENT_MONITOR_PORT || 9761);
+  return env;
 }
 
 function writeMcpConfig(file) {

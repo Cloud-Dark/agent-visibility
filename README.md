@@ -176,6 +176,62 @@ Port via `AGENT_MONITOR_PORT` (default `9761`).
 
 ---
 
+## 💬 Prompt API: kendalikan Claude Code dari aplikasi lain
+
+Dashboard punya kotak **Prompt Claude Code**: ketik lalu tekan Enter. Aplikasi lain bisa melakukan hal yang sama lewat HTTP.
+
+Setiap prompt menjalankan `claude -p` headless. Kirim `session_id` dari respons sebelumnya supaya percakapannya berlanjut. Ini sesi Claude Code **terpisah** yang dimiliki server monitor, bukan terminal yang sedang kamu pakai, karena Claude Code tidak menyediakan jalur resmi untuk mengirim prompt ke sesi interaktif yang sudah berjalan.
+
+```bash
+# kirim prompt lalu tunggu jawabannya
+curl -X POST http://127.0.0.1:9761/api/prompts \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"Ringkas README.md","wait":true}'
+
+# lanjutkan percakapan yang sama
+curl -X POST http://127.0.0.1:9761/api/prompts \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"Terjemahkan ke Inggris","session_id":"<session_id>","wait":true}'
+```
+
+Respons berisi `run_id`, `status` (`running`/`done`/`error`/`cancelled`), `result`, `session_id`, `cost_usd`, dan `messages` (teks dan tool yang dipakai).
+
+Tanpa `wait`, server langsung membalas `202` beserta `run_id`. Hasilnya bisa diambil dengan tiga cara:
+- `GET /api/prompts/<run_id>?wait_ms=60000` (long-poll)
+- SSE `/api/stream`, event `chat.user` / `chat.assistant` / `chat.tool` / `chat.done`
+- webhook yang menerima event `prompt.done`
+
+Field opsional `cwd` menentukan folder kerja.
+
+### ✅ Approve / Reject
+
+Run headless tidak punya terminal untuk menampilkan dialog izin. Karena itu, setiap izin diteruskan ke dashboard lewat `--permission-prompt-tool` (`approval-mcp.js`). Contohnya Bash, git, atau tool lain yang belum ada di allowlist. Di dashboard muncul kartu kuning berisi tool dan perintahnya, dengan tombol **Approve** dan **Reject**. Aplikasi lain bisa memakai:
+
+```bash
+curl http://127.0.0.1:9761/api/approvals?status=pending
+curl -X POST http://127.0.0.1:9761/api/approvals/<id> \
+  -H "Content-Type: application/json" -d '{"decision":"allow"}'   # atau "deny"
+```
+
+Selama belum diputuskan, run menunggu. Setelah 10 menit tanpa keputusan, izin otomatis ditolak. Tool yang sudah ada di allowlist `settings.json` kamu tetap langsung jalan tanpa ditanya.
+
+### ⚡ YOLO mode
+
+Tombol **YOLO** di dashboard, atau `POST /api/yolo {"yolo":true}`, menyetujui semua permintaan izin secara otomatis, termasuk yang sedang menunggu. Kondisi default-nya mati, dan nilainya kembali mati setiap server restart. Nyalakan hanya kalau kamu percaya pada prompt yang dikirim, karena dalam mode ini Claude boleh menjalankan perintah apa pun di mesinmu.
+
+### 🔒 Akses
+
+Semua endpoint prompt, approval, dan YOLO hanya menerima request dari localhost. Untuk aplikasi di mesin lain, jalankan server dengan `AGENT_MONITOR_HOST=0.0.0.0` dan `AGENT_MONITOR_TOKEN=<rahasia>`, lalu kirim header `Authorization: Bearer <rahasia>`. Dashboard di LAN dibuka dengan `?token=<rahasia>`. Jangan buka port ini ke internet.
+
+| Env | Default | Fungsi |
+|-----|---------|--------|
+| `AGENT_MONITOR_TOKEN` | kosong | Token untuk akses non-localhost |
+| `AGENT_MONITOR_CWD` | folder server | Folder kerja default untuk run |
+| `AGENT_MONITOR_CHAT_MODE` | `default` | `--permission-mode` untuk run |
+| `AGENT_MONITOR_MAX_RUNS` | `3` | Maksimal run yang berjalan bersamaan |
+
+---
+
 ## 📡 REST API
 
 | Method & path | Fungsi |
@@ -190,6 +246,14 @@ Port via `AGENT_MONITOR_PORT` (default `9761`).
 | `GET /api/webhooks` | Daftar webhook |
 | `POST /api/webhooks` | `{"url":"https://…"}` — tambah |
 | `DELETE /api/webhooks` | `{"url":"https://…"}` — hapus |
+| `POST /api/prompts` | `{"prompt":"…","session_id"?,"cwd"?,"wait"?,"timeout_ms"?}` — jalankan prompt |
+| `GET /api/prompts` | Daftar run (50 terakhir, disimpan di memori) |
+| `GET /api/prompts/<run_id>?wait_ms=` | Detail run, bisa long-poll |
+| `DELETE /api/prompts/<run_id>` | Batalkan run |
+| `GET /api/approvals?status=pending` | Daftar permintaan izin |
+| `POST /api/approvals/<id>` | `{"decision":"allow"\|"deny"}` |
+| `GET/POST /api/yolo` | `{"yolo":true}` — auto-approve semua |
+| `GET/POST/DELETE /api/chat` | Percakapan kotak chat di dashboard |
 
 ---
 
@@ -263,12 +327,15 @@ agent-visibility/
    ├─ package.json                          ← socket.io (opsional, sudah terinstal)
    ├─ server.js                             ← dashboard + REST + SSE + socket.io
    ├─ mcp-server.js                         ← 9 MCP tools (stdio)
+   ├─ approval-mcp.js                       ← permission-prompt tool: Approve/Reject/YOLO dari dashboard
    ├─ hooks/
    │  ├─ hooks.json                         ← SessionStart, UserPromptSubmit, SubagentStart/Stop, PostToolUse
    │  ├─ ensure-server.js                   ← auto-start + aturan port + watchdog
    │  ├─ record.js                          ← catat spawn/stop
    │  └─ activity.js                        ← catat tool/file per agent
-   └─ lib/store.js                          ← state.json, webhook POST, stdin JSON
+   └─ lib/
+      ├─ store.js                          ← state.json, webhook POST, stdin JSON
+      └─ chat.js                           ← Prompt API: run claude -p, approvals, YOLO
 ```
 
 ---
