@@ -41,8 +41,8 @@ socket.io. Server nyala otomatis setiap Claude Code berjalan.
 Butuh: **Node.js ≥ 18**.
 
 ```powershell
-# 1. Daftarkan repo ini sebagai marketplace lokal (cukup sekali)
-claude plugin marketplace add "D:\project\agentmonitoring"
+# 1. Daftarkan marketplace dari GitHub (cukup sekali)
+claude plugin marketplace add Cloud-Dark/agent-visibility
 
 # 2. Install pluginnya
 claude plugin install agent-monitoring@agentmonitoring
@@ -256,7 +256,7 @@ Invoke-RestMethod http://127.0.0.1:9761/api/agents | % agents | ft agent_id, age
 agent-visibility/
 ├─ README.md                                ← kamu di sini
 ├─ .gitignore
-├─ .claude-plugin/marketplace.json          ← manifest marketplace lokal
+├─ .claude-plugin/marketplace.json          ← manifest marketplace (GitHub: Cloud-Dark/agent-visibility)
 └─ plugins/agent-monitoring/                ← plugin
    ├─ .claude-plugin/plugin.json
    ├─ .mcp.json                             ← MCP server agent-monitor
