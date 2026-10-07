@@ -6,6 +6,7 @@
 ## Contents
 
 - [Unreleased](#unreleased)
+- [0.4.1](#041)
 - [0.4.0](#040)
 - [0.3.0](#030)
 - [0.2.0](#020)
@@ -16,6 +17,14 @@ This changelog follows Keep a Changelog format.
 ## Unreleased
 
 - None.
+
+## 0.4.1
+
+Date: 2026-10-07
+
+### Fixed
+
+- record.js now merges into the existing agent entry on start and stop, instead of replacing it. Before this fix, the activity, files_touched, last_summary, and last_activity_at that activity.js recorded were lost when an agent finished.
 
 ## 0.4.0
 

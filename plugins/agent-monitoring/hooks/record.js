@@ -21,7 +21,10 @@ async function main() {
 
   const s = loadState();
   const prev = s.agents[agentId] || {};
+  // Merge into the existing entry so activity, files_touched and
+  // last_summary written by activity.js survive the stop event.
   const agent = {
+    ...prev,
     agent_id: agentId,
     agent_type: agentType || prev.agent_type || null,
     status: action === "start" ? "running" : "done",
