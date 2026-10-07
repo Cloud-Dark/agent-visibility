@@ -9,7 +9,9 @@ const path = require("path");
 const os = require("os");
 const crypto = require("crypto");
 const fs = require("fs");
-const { loadState, saveState, fireWebhooks } = require("./store");
+const { fireWebhooks } = require("./store");
+// State lives in the registry (single writer); chat keeps its part under state.chat.
+const registry = require("./registry");
 
 const MAX_MESSAGES = 100;
 const MAX_RUNS = 50;
@@ -40,7 +42,7 @@ function httpError(code, message) {
 
 // ---- dashboard conversation (persisted in state.json) ----
 function chatState() {
-  const c = loadState().chat || {};
+  const c = registry.get().chat || {};
   return {
     session_id: c.session_id || null,
     cwd: c.cwd || DEFAULT_CWD,
@@ -49,11 +51,11 @@ function chatState() {
 }
 
 function saveChat(patch) {
-  const s = loadState();
+  const s = registry.get();
   const c = { ...chatState(), ...patch };
   if (c.messages.length > MAX_MESSAGES) c.messages = c.messages.slice(-MAX_MESSAGES);
   s.chat = c;
-  saveState(s);
+  registry.touch();
   return c;
 }
 
@@ -92,15 +94,42 @@ function trimRuns() {
   for (const r of done.slice(0, Math.max(0, runs.size - MAX_RUNS))) runs.delete(r.run_id);
 }
 
+// Runs may only work inside these folders. AGENT_MONITOR_CWD_ROOTS is a
+// list separated by the OS path delimiter (";" on Windows, ":" elsewhere);
+// default is just DEFAULT_CWD.
+const CWD_ROOTS = String(process.env.AGENT_MONITOR_CWD_ROOTS || DEFAULT_CWD)
+  .split(path.delimiter)
+  .filter(Boolean)
+  .map((r) => {
+    try {
+      return fs.realpathSync(path.resolve(r));
+    } catch {
+      return null;
+    }
+  })
+  .filter(Boolean);
+
+function cwdAllowed(dir) {
+  const norm = (x) => (process.platform === "win32" ? x.toLowerCase() : x);
+  return CWD_ROOTS.some((root) => {
+    const rel = path.relative(norm(root), norm(dir));
+    return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  });
+}
+
 // Start one prompt run. Returns the run object immediately.
 function startRun({ text, session_id, cwd, source = "api" }, emit) {
   if (session_id && !UUID_RE.test(session_id)) throw httpError(400, "session_id must be a UUID");
-  const dir = cwd || DEFAULT_CWD;
-  let isDir = false;
+  let dir;
   try {
-    isDir = fs.statSync(dir).isDirectory();
-  } catch {}
-  if (!isDir) throw httpError(400, `cwd is not a directory: ${dir}`);
+    dir = fs.realpathSync(path.resolve(cwd || DEFAULT_CWD));
+  } catch {
+    throw httpError(400, `cwd does not exist: ${cwd}`);
+  }
+  if (!fs.statSync(dir).isDirectory()) throw httpError(400, `cwd is not a directory: ${dir}`);
+  if (!cwdAllowed(dir)) {
+    throw httpError(403, `cwd is outside the allowed roots (AGENT_MONITOR_CWD_ROOTS): ${dir}`);
+  }
   const active = running();
   if (active.length >= MAX_CONCURRENT) throw httpError(429, `max ${MAX_CONCURRENT} prompts running, try again later`);
   if (session_id && active.some((r) => r.session_id === session_id)) {
@@ -134,7 +163,12 @@ function startRun({ text, session_id, cwd, source = "api" }, emit) {
   out("chat.user", { text });
 
   approvalEmit = emit;
-  const mcpFile = path.join(os.tmpdir(), "claude-agent-monitor", "approval-mcp.json");
+  // Per-run secret: only this run's approval-mcp.js can create or poll
+  // approvals for it. Runs can never decide approvals or toggle YOLO.
+  run.secret = crypto.randomBytes(24).toString("base64url");
+  // Private temp dir per run (mkdtemp, owner-only), removed when the run ends.
+  run.tmpdir = fs.mkdtempSync(path.join(os.tmpdir(), "agentmon-run-"));
+  const mcpFile = path.join(run.tmpdir, "approval-mcp.json");
   writeMcpConfig(mcpFile);
   const args = [
     "-p", "--output-format", "stream-json", "--verbose",
@@ -149,7 +183,7 @@ function startRun({ text, session_id, cwd, source = "api" }, emit) {
     cwd: dir,
     shell: process.platform === "win32",
     windowsHide: true,
-    env: runEnv(run.run_id),
+    env: runEnv(run),
   });
   procs.set(run.run_id, child);
   child.stdin.on("error", () => {});
@@ -206,6 +240,12 @@ function startRun({ text, session_id, cwd, source = "api" }, emit) {
   function finish(error) {
     if (!procs.has(run.run_id)) return;
     procs.delete(run.run_id);
+    if (run.tmpdir) {
+      try {
+        fs.rmSync(run.tmpdir, { recursive: true, force: true });
+      } catch {}
+      run.tmpdir = null;
+    }
     for (const a of approvals.values()) {
       if (a.run_id === run.run_id && a.status === "pending") resolveApproval(a.id, "denied", "run ended");
     }
@@ -217,8 +257,8 @@ function startRun({ text, session_id, cwd, source = "api" }, emit) {
       out("chat.error", { text: run.error });
     }
     out("chat.done", { status: run.status, result: run.result, cost_usd: run.cost_usd });
-    const s = loadState();
-    fireWebhooks(s.webhooks, { event: "prompt.done", ts: run.finished_at, run }, s.transports ? s.transports.webhook !== false : true);
+    const s = registry.get();
+    fireWebhooks(s.webhooks, { event: "prompt.done", ts: run.finished_at, run: publicRun(run) }, s.transports ? s.transports.webhook !== false : true);
     for (const resolve of waiters.get(run.run_id) || []) resolve(run);
     waiters.delete(run.run_id);
   }
@@ -248,7 +288,7 @@ function cancel(runId) {
   run.status = "cancelled";
   // shell:true on Windows wraps claude in cmd.exe; kill the whole tree.
   if (process.platform === "win32") {
-    spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true });
+    spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore", windowsHide: true }).on("error", () => {});
   } else {
     child.kill("SIGTERM");
   }
@@ -260,13 +300,16 @@ function cancel(runId) {
 // A run must be its own top-level session, not a child of that one, or
 // it can pick up the parent's permission state. ANTHROPIC_* (model,
 // base URL, auth) are kept.
-function runEnv(runId) {
+function runEnv(run) {
   const env = {};
   for (const [k, v] of Object.entries(process.env)) {
     if (k === "CLAUDECODE" || k === "CLAUDE_PID" || k.startsWith("CLAUDE_CODE_")) continue;
     env[k] = v;
   }
-  env.AGENT_MONITOR_RUN_ID = runId;
+  // Drop server secrets: the run must not be able to call the full API.
+  for (const k of ["AGENT_MONITOR_TOKEN", "AGENT_MONITOR_PASSWORD", "AGENT_MONITOR_CLIENT_TOKEN"]) delete env[k];
+  env.AGENT_MONITOR_RUN_ID = run.run_id;
+  env.AGENT_MONITOR_RUN_SECRET = run.secret;
   env.AGENT_MONITOR_PORT = String(process.env.AGENT_MONITOR_PORT || 9761);
   return env;
 }
@@ -277,20 +320,40 @@ function writeMcpConfig(file) {
       agentmon_approval: { command: process.execPath, args: [path.join(__dirname, "..", "approval-mcp.js")] },
     },
   };
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(cfg), "utf8");
+  fs.writeFileSync(file, JSON.stringify(cfg), { encoding: "utf8", mode: 0o600, flag: "wx" });
 }
 
 // ---- approvals (Approve / Reject / YOLO) ----
+// Card summary: the main field first, then every other input field, so
+// a Write/Edit shows its content and MCP tools cannot hide extra args.
 function summarizeInput(input) {
   const i = input || {};
-  const v = i.command || i.file_path || i.url || i.pattern || i.description || "";
-  return String(v || JSON.stringify(i)).slice(0, 500);
+  const mainKey = ["command", "file_path", "url", "pattern"].find((k) => typeof i[k] === "string");
+  const rest = { ...i };
+  if (mainKey) delete rest[mainKey];
+  let extra = "";
+  if (Object.keys(rest).length) {
+    try {
+      extra = JSON.stringify(rest, null, 1);
+    } catch {}
+  }
+  const text = (mainKey ? i[mainKey] : "") + (mainKey && extra ? "\n" : "") + extra;
+  return text.length > 2000 ? text.slice(0, 2000) + "\n… (truncated)" : text;
 }
 
-function createApproval({ run_id, tool_name, input, tool_use_id }) {
-  const run = runs.get(run_id);
-  if (!run || run.status !== "running") throw httpError(404, "unknown or finished run_id");
+function runForSecret(secret) {
+  if (typeof secret !== "string" || !secret) return null;
+  for (const r of runs.values()) {
+    if (r.status === "running" && r.secret && r.secret.length === secret.length &&
+        crypto.timingSafeEqual(Buffer.from(r.secret), Buffer.from(secret))) return r;
+  }
+  return null;
+}
+
+function createApproval({ tool_name, input, tool_use_id }, secret) {
+  const run = runForSecret(secret);
+  if (!run) throw httpError(403, "unknown run secret");
+  const run_id = run.run_id;
   const a = {
     id: crypto.randomUUID(),
     run_id,
@@ -369,11 +432,23 @@ function sendDashboard(text, emit) {
   return startRun({ text, session_id: c.session_id, cwd: c.cwd, source: "dashboard" }, emit);
 }
 
-const getRun = (id) => runs.get(id) || null;
+const publicRun = (r) => {
+  if (!r) return null;
+  const { secret, tmpdir, ...rest } = r;
+  return rest;
+};
+const getRun = (id) => publicRun(runs.get(id));
 const listRuns = () =>
-  [...runs.values()].reverse().map(({ messages, ...r }) => ({ ...r, message_count: messages.length }));
+  [...runs.values()].reverse().map(({ messages, secret, tmpdir, ...r }) => ({ ...r, message_count: messages.length }));
+// Approval lookup for the run that owns it (approval-mcp.js polling).
+function approvalForRun(id, secret) {
+  const a = approvals.get(id);
+  const run = runForSecret(secret);
+  if (!a || !run || a.run_id !== run.run_id) return null;
+  return a;
+}
 
 module.exports = {
   status, reset, sendDashboard, startRun, waitFor, cancel, getRun, listRuns, PERMISSION_MODE,
-  createApproval, resolveApproval, waitApproval, listApprovals, setYolo, getYolo,
+  createApproval, resolveApproval, waitApproval, listApprovals, setYolo, getYolo, approvalForRun, publicRun,
 };

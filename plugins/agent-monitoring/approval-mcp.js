@@ -7,7 +7,9 @@
 const http = require("http");
 
 const PORT = Number(process.env.AGENT_MONITOR_PORT || 9761);
-const RUN_ID = process.env.AGENT_MONITOR_RUN_ID || "";
+// Secret the server gave this run. It authenticates every request and
+// ties approvals to this run only.
+const RUN_SECRET = process.env.AGENT_MONITOR_RUN_SECRET || "";
 
 function request(method, path, body) {
   return new Promise((resolve, reject) => {
@@ -18,7 +20,10 @@ function request(method, path, body) {
         port: PORT,
         path,
         method,
-        headers: data ? { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(data) } : {},
+        headers: {
+          Authorization: `Bearer ${RUN_SECRET}`,
+          ...(data ? { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(data) } : {}),
+        },
         timeout: 60000,
       },
       (res) => {
@@ -41,8 +46,7 @@ function request(method, path, body) {
 }
 
 async function decide(args) {
-  const created = await request("POST", "/api/approvals", {
-    run_id: RUN_ID,
+  const created = await request("POST", "/api/run/approvals", {
     tool_name: args.tool_name,
     input: args.input,
     tool_use_id: args.tool_use_id,
@@ -50,7 +54,7 @@ async function decide(args) {
   if (created.error) return { behavior: "deny", message: `agent-monitor: ${created.error}` };
   let a = created;
   while (a.status === "pending") {
-    a = await request("GET", `/api/approvals/${a.id}?wait_ms=25000`);
+    a = await request("GET", `/api/run/approvals/${a.id}?wait_ms=25000`);
   }
   if (a.status === "allowed") return { behavior: "allow", updatedInput: args.input || {} };
   return { behavior: "deny", message: a.message || "Rejected from agent-monitor dashboard" };

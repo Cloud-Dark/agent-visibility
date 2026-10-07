@@ -51,7 +51,8 @@
   let frame = 0;
   let hover = null;
   let selected = null;
-  let showDone = false; // finished agents hidden unless toggled on
+  let showDone = false;
+  let sessions = []; // connected Claude Code clients // finished agents hidden unless toggled on
   const DONE_LINGER_MS = 20 * 1000; // a just-finished agent stays briefly, then leaves
 
   const r = (x, y, w, h, c) => {
@@ -477,13 +478,14 @@
     ctx.textBaseline = "top";
     ctx.fillStyle = C.white;
     ctx.fillText("AGENT OFFICE", 6, 6);
-    const items = [["WORK", counts.working, C.glowB], ["IDLE", counts.idle, C.amber], ["DONE", counts.done, C.glow]];
-    let x = 120;
+    const online = sessions.filter((x) => x.status === "ready" || x.status === "busy").length;
+    const items = [["CLAUDE", online, "#a371f7"], ["WORK", counts.working, C.glowB], ["IDLE", counts.idle, C.amber], ["DONE", counts.done, C.glow]];
+    let x = 92;
     for (const [t, n, c] of items) {
       r(x, 6, 5, 5, c);
       ctx.fillStyle = C.white;
       ctx.fillText(`${t} ${n}`, x + 8, 6);
-      x += 62;
+      x += 56;
     }
     if (!workers.size) {
       ctx.fillStyle = "rgba(255,255,255,.8)";
@@ -582,6 +584,9 @@
     update(list) {
       agents = Array.isArray(list) ? list : [];
       syncWorkers();
+    },
+    setSessions(list) {
+      sessions = Array.isArray(list) ? list : [];
     },
     setShowDone(on) {
       showDone = !!on;

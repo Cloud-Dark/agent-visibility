@@ -19,17 +19,22 @@ socket.io. Server nyala otomatis setiap Claude Code berjalan.
   event stream, auto-refresh 3 detik + SSE live
 - 🔌 **3 koneksi yang bisa dipilih on/off** — webhook, SSE stream, socket.io
   (toggle di dashboard / API / MCP)
+- 🖧 **Server pusat** — semua Claude Code-mu (di laptop ini atau mesin lain)
+  melapor ke satu dashboard: buka 10 Claude Code, muncul 10 sesi `ready`;
+  begitu satu sesi men-spawn agent, agent-agentnya ikut muncul
+- 🔐 **Login** — dashboard memakai password, API memakai token, dan hook
+  Claude Code memakai client token yang hanya boleh melapor
 - 🔎 **Detail per agent** — "agent ini mengerjakan apa": tool terakhir, 50
   aktivitas terakhir, file yang disentuh, penanda stale
 - 🚀 **Auto-start** — server nyala otomatis saat Claude Code berjalan
   (hook `SessionStart` + `UserPromptSubmit` sebagai watchdog), mati? prompt
   berikutnya menyalakannya lagi
-- 🔁 **Aturan port cerdas** — port dipakai monitor lama → kill lalu naikkan
-  yang baru di port yang sama; dipakai aplikasi lain → otomatis naik
-  (9762, 9763, …)
+- 🔁 **Aturan port cerdas** — port dipakai monitor yang sehat → dipakai
+  ulang; dipakai aplikasi lain atau tidak menjawab → otomatis naik
+  (9762, 9763, …), tanpa membunuh proses apa pun
 - 🌐 **Bind fleksibel** — default `127.0.0.1` (lokal saja), set `0.0.0.0`
   agar bisa diakses se-jaringan seperti `npm run dev -- --host`
-- 🤖 **MCP server** — 9 tools agar Claude-nya sendiri bisa ditanya
+- 🤖 **MCP server** — 10 tools agar Claude-nya sendiri bisa ditanya
   "agent apa saja yang running?"
 - 📦 **Tanpa dependency wajib** — REST + SSE + webhook jalan dengan Node.js
   polos; hanya socket.io yang butuh `npm install` (sudah termasuk)
@@ -64,10 +69,11 @@ Buka URL itu di browser. Selesai. Tidak ada yang perlu dijalankan manual.
 
 ## 🖥️ Dashboard
 
-`GET /` — satu halaman berisi:
+`GET /` membutuhkan login (lihat [Login dan keamanan](#-login-dan-keamanan)). Isi halamannya:
 
 | Bagian | Isi |
 |--------|-----|
+| **Claude Code sessions (N online)** | Satu kartu per Claude Code yang terhubung: nama sesi, host, folder, status `ready` / `busy` / `offline`, jumlah agent yang sedang jalan, dan prompt terakhir. Sesi offline bisa dihapus dengan tombol *forget* |
 | **Connection** | Pill toggle webhook / SSE stream / socket.io (klik untuk on/off), alamat SSE + status socket.io |
 | **Agents (N)** | Kartu per agent: ● hijau running / abu done (⚠️ stale bila >2 mnt tanpa aktivitas), tipe, `agent_id`, start–stop, **doing** (tool terakhir), file yang disentuh, dropdown riwayat aktivitas |
 | **Live stream** | Event spawn/stop realtime via SSE |
@@ -135,7 +141,7 @@ require("http").createServer((req, res) => {
 ### 2. SSE stream (Server-Sent Events)
 
 ```powershell
-curl -N http://127.0.0.1:9761/api/stream
+curl -N -H "Authorization: Bearer <api_token>" http://127.0.0.1:9761/api/stream
 ```
 
 Setiap event tiba sebagai:
@@ -144,7 +150,11 @@ Setiap event tiba sebagai:
 data: {"event":"agent.spawn","ts":"...","agent":{...}}
 
 data: {"event":"agent.stop","ts":"...","agent":{...}}
+
+data: {"event":"session.update","session":{"session_id":"...","status":"busy",...}}
 ```
+
+Event lain: `session.new`, `agent.activity`, `agent.idle`, `agent.renamed`, `chat.*`, `approval.*`, `yolo`.
 
 Ada heartbeat `: ping` tiap 15 detik agar koneksi idle tidak diputus proxy.
 Di browser cukup `new EventSource('/api/stream')` (dipakai dashboard).
@@ -158,10 +168,78 @@ Client (socket.io v4):
 
 ```js
 const { io } = require("socket.io-client");
-const s = io("http://127.0.0.1:9761");
+const s = io("http://127.0.0.1:9761", { auth: { token: "<api_token>" } });
 s.on("hello", (m) => console.log("connected", m));
 s.on("agent-event", (e) => console.log(e.event, e.agent.agent_id));
 ```
+
+---
+
+## 🔐 Login dan keamanan
+
+Waktu pertama kali jalan, server membuat `auth.json` di folder state (`%TEMP%/claude-agent-monitor/` di Windows, `/tmp/claude-agent-monitor/` di Linux/macOS). Isinya empat rahasia acak:
+
+| Kunci | Env pengganti | Dipakai oleh | Boleh apa |
+|-------|---------------|--------------|-----------|
+| `password` | `AGENT_MONITOR_PASSWORD` | kamu, di halaman `/login` | semua fitur dashboard |
+| `api_token` | `AGENT_MONITOR_TOKEN` | aplikasi lain dan MCP tools (`Authorization: Bearer …`) | semua REST API |
+| `client_token` | `AGENT_MONITOR_CLIENT_TOKEN` | hook Claude Code di mesin mana pun | hanya `POST /api/ingest` (melapor sesi, prompt, agent, tool) |
+| `secret` | (hanya di file) | server | menandatangani cookie login |
+
+Lihat password-mu:
+
+```powershell
+Get-Content "$env:TEMP\claude-agent-monitor\auth.json"
+```
+
+Aturan yang berlaku untuk semua endpoint selain `/__health` dan `/login`:
+
+- **Tidak ada lagi pengecualian localhost.** Request dari 127.0.0.1 juga harus login atau membawa token.
+- Cookie login bersifat `HttpOnly` dan `SameSite=Strict`, berlaku 30 hari. Mengganti password otomatis mengeluarkan semua browser.
+- Request dari browser dengan `Origin` situs lain ditolak (403), dan body POST harus `application/json` (selain itu 415). Akibatnya halaman web lain tidak bisa menyalakan YOLO atau mengirim prompt.
+- Login gagal 5 kali dari IP yang sama akan diblokir sementara, mulai 1 menit dan naik bertahap sampai 15 menit.
+- Setiap prompt run mendapat secret sendiri. `approval-mcp.js` hanya bisa membuat dan memantau approval miliknya sendiri. Run tidak bisa menyetujui approval atau menyalakan YOLO, dan `AGENT_MONITOR_TOKEN`/`PASSWORD` tidak diwariskan ke run.
+- Kartu approval menampilkan **seluruh** input tool (misalnya isi file pada Write/Edit), bukan hanya path-nya.
+- Folder kerja prompt dibatasi oleh `AGENT_MONITOR_CWD_ROOTS`.
+
+Kalau server dibuka lewat HTTPS (misalnya di balik reverse proxy), set `AGENT_MONITOR_SECURE_COOKIE=1`. Kalau dashboard dibuka dari origin lain (domain proxy), tambahkan origin itu ke `AGENT_MONITOR_ORIGINS`.
+
+---
+
+## 🖧 Mode server pusat: banyak Claude Code, satu dashboard
+
+Server ini bisa jadi pusat untuk semua Claude Code-mu, baik di laptop yang sama maupun di mesin lain. Setiap Claude Code yang memasang plugin ini menjadi **client**:
+
+- Saat dibuka, sesinya muncul sebagai kartu **ready**. Buka 10 Claude Code, maka akan ada 10 kartu ready.
+- Saat kamu mengirim prompt, kartunya berubah jadi **busy** dan menampilkan prompt terakhir.
+- Saat sesi itu men-spawn subagent, agent-agent tersebut muncul di dashboard dan pixel office, lengkap dengan host dan sesi asalnya.
+- Kalau sudah 30 menit tanpa event, statusnya jadi **offline**.
+
+### 1. Jalankan server di mesin pusat
+
+```bash
+git clone https://github.com/Cloud-Dark/agent-visibility
+cd agent-visibility/plugins/agent-monitoring
+npm install                      # opsional, untuk socket.io
+AGENT_MONITOR_HOST=0.0.0.0 node server.js
+cat /tmp/claude-agent-monitor/auth.json   # catat password dan client_token
+```
+
+### 2. Arahkan setiap Claude Code ke server itu
+
+Di setiap mesin client, pasang plugin seperti biasa, lalu set dua env sebelum membuka Claude Code:
+
+```powershell
+$env:AGENT_MONITOR_URL = "http://192.168.1.10:9761"     # alamat server pusat
+$env:AGENT_MONITOR_CLIENT_TOKEN = "<client_token dari auth.json server>"
+claude
+```
+
+Dengan `AGENT_MONITOR_URL` diset, plugin **tidak** menyalakan server lokal. Hook hanya melapor ke server pusat. MCP tools (`agents_list`, `sessions_list`, dan lainnya) juga membaca dari server pusat, dengan syarat `AGENT_MONITOR_TOKEN` diisi `api_token` server.
+
+Tanpa `AGENT_MONITOR_URL`, semuanya berjalan seperti sebelumnya: server lokal di `127.0.0.1:9761`, dan semua Claude Code di laptop ini otomatis melapor ke sana.
+
+> ⚠️ Lalu lintas client ke server berupa HTTP biasa. Di jaringan yang tidak kamu percayai, pasang server di balik HTTPS (reverse proxy), lalu pakai `https://…` di `AGENT_MONITOR_URL` dan `AGENT_MONITOR_SECURE_COOKIE=1`.
 
 ---
 
@@ -186,8 +264,7 @@ $env:AGENT_MONITOR_HOST = "0.0.0.0"
 Manual sekali jalan: `node server.js --host 0.0.0.0`. Healthcheck ikut
 melaporkan `host`, dan API menyertakan `lan_ips` saat bind `0.0.0.0`.
 
-> ⚠️ `0.0.0.0` membuka dashboard ke jaringan lokalmu. Jangan pakai di
-> jaringan publik/tidak terpercaya — tidak ada autentikasi.
+> ⚠️ `0.0.0.0` membuka server ke jaringan lokalmu. Dashboard tetap butuh login dan API tetap butuh token, tapi koneksinya HTTP biasa. Untuk jaringan publik, pakai HTTPS di depannya.
 
 Port via `AGENT_MONITOR_PORT` (default `9761`).
 
@@ -238,11 +315,17 @@ Tombol **YOLO** di dashboard, atau `POST /api/yolo {"yolo":true}`, menyetujui se
 
 ### 🔒 Akses
 
-Semua endpoint prompt, approval, dan YOLO hanya menerima request dari localhost. Untuk aplikasi di mesin lain, jalankan server dengan `AGENT_MONITOR_HOST=0.0.0.0` dan `AGENT_MONITOR_TOKEN=<rahasia>`, lalu kirim header `Authorization: Bearer <rahasia>`. Dashboard di LAN dibuka dengan `?token=<rahasia>`. Jangan buka port ini ke internet.
+Aplikasi lain memakai `api_token` dari `auth.json` (atau `AGENT_MONITOR_TOKEN`) sebagai header `Authorization: Bearer <token>`, termasuk dari localhost. Dashboard memakai login password. Detailnya ada di [Login dan keamanan](#-login-dan-keamanan).
 
 | Env | Default | Fungsi |
 |-----|---------|--------|
-| `AGENT_MONITOR_TOKEN` | kosong | Token untuk akses non-localhost |
+| `AGENT_MONITOR_TOKEN` | `api_token` di auth.json | Token REST API untuk aplikasi lain dan MCP tools |
+| `AGENT_MONITOR_PASSWORD` | `password` di auth.json | Password login dashboard |
+| `AGENT_MONITOR_CLIENT_TOKEN` | `client_token` di auth.json | Token hook Claude Code untuk `/api/ingest` |
+| `AGENT_MONITOR_URL` | kosong (server lokal) | Alamat server pusat; kalau diset, plugin hanya menjadi client |
+| `AGENT_MONITOR_CWD_ROOTS` | `AGENT_MONITOR_CWD` | Folder yang boleh dipakai sebagai `cwd` prompt (pisahkan dengan `;` di Windows, `:` di Linux/macOS) |
+| `AGENT_MONITOR_ORIGINS` | kosong | Origin browser tambahan yang diizinkan, dipisah koma |
+| `AGENT_MONITOR_SECURE_COOKIE` | kosong | `1` untuk menambah flag `Secure` pada cookie (pakai di balik HTTPS) |
 | `AGENT_MONITOR_CWD` | folder server | Folder kerja default untuk run |
 | `AGENT_MONITOR_CHAT_MODE` | `default` | `--permission-mode` untuk run |
 | `AGENT_MONITOR_MAX_RUNS` | `3` | Maksimal run yang berjalan bersamaan |
@@ -251,11 +334,17 @@ Semua endpoint prompt, approval, dan YOLO hanya menerima request dari localhost.
 
 ## 📡 REST API
 
+Semua endpoint kecuali `/__health`, `/login`, dan `/api/login` membutuhkan cookie login atau `Authorization: Bearer <api_token>`. Body POST/PUT/DELETE harus `application/json`.
+
 | Method & path | Fungsi |
 |---------------|--------|
-| `GET /` | Dashboard |
+| `GET /` | Dashboard (redirect ke `/login` kalau belum login) |
+| `GET /login`, `POST /api/login`, `POST /api/logout` | Login dan logout `{"password":"…"}` |
+| `POST /api/ingest` | **Client token.** Event dari hook Claude Code: `session-start`, `prompt`, `subagent-start`, `subagent-stop`, `tool`, `session-end` |
+| `GET /api/sessions` | Daftar Claude Code yang terhubung |
+| `DELETE /api/sessions/<id>` | Hapus sesi dari daftar |
 | `GET /__health` | `{"monitor":"claude-agent-monitor","port":9761,"host":"…","pid":…}` — dipakai deteksi "port milik siapa" |
-| `GET /api/agents` | Daftar agent (terbaru dulu) + `server` (port, host, lan_ips, pid, uptime, socketio, transports) + webhooks + transports |
+| `GET /api/agents` | Daftar agent (terbaru dulu) + `sessions` + `server` (port, host, lan_ips, pid, uptime, socketio, transports) + webhooks + transports |
 | `GET /api/agents/<id>` | Detail satu agent: tugas, timeline tool + hasil, hasil akhir |
 | `PUT /api/agents/<id>/name` | `{"name":"Budi"}` — beri nama agent (kosong = reset) |
 | `GET /api/events?limit=50` | Event spawn/stop terakhir (maks 200, terbaru dulu) |
@@ -282,32 +371,41 @@ Semua endpoint prompt, approval, dan YOLO hanya menerima request dari localhost.
 |------|--------|
 | `agents_list {status?}` | Daftar agent (`all`/`running`/`done`) |
 | `agents_get {agent_id}` | Detail satu agent + aktivitas + file |
-| `monitor_status` | Port, host, pid, uptime, hitungan running/done, jumlah webhook |
+| `sessions_list` | Claude Code yang terhubung: host, folder, status, agent yang jalan |
+| `monitor_status` | URL server, port, pid, uptime, sesi online, hitungan running/done, jumlah webhook |
 | `events_recent {limit?}` | Event terakhir |
 | `webhook_add/list/remove` | Kelola webhook |
 | `transports_get/set` | Lihat/ubah koneksi aktif |
 
 Contoh: *"agent apa saja yang running?"* → Claude memanggil `agents_list
-{status:"running"}`.
+{status:"running"}`. MCP server memanggil REST API server (lokal atau `AGENT_MONITOR_URL`) dengan `api_token`, jadi isinya sama dengan dashboard.
 
 ---
 
 ## ⚙️ Cara kerja
 
 ```text
-Claude Code session
- ├─ SessionStart / UserPromptSubmit ──▶ ensure-server.js ──▶ server.js (daemon, detached)
- │                                         ├─ port milik monitor lama? kill → naikkan baru di port sama
- │                                         └─ port milik app lain? coba 9762, 9763, …
- ├─ SubagentStart ──▶ record.js start ──▶ state.json (+ webhook POST + broadcast SSE/socket.io)
- ├─ PostToolUse ──▶ activity.js ──▶ catat tool/summary/file per agent
- ├─ SubagentStop ──▶ record.js stop ──▶ status done (+ webhook POST + broadcast)
- └─ dashboard / REST / SSE / socket.io / MCP ◀── baca state.json yang sama
+Claude Code (mesin mana pun, satu atau banyak)
+ ├─ SessionStart ──▶ ensure-server.js ──▶ server.js lokal (kalau AGENT_MONITOR_URL kosong)
+ │                └▶ report.js session-start ─┐
+ ├─ UserPromptSubmit ──▶ report.js prompt ─────┤
+ ├─ SubagentStart / SubagentStop ──▶ report.js ┤  POST /api/ingest  (client token)
+ ├─ PostToolUse ──▶ report.js tool ────────────┤
+ └─ SessionEnd ──▶ report.js session-end ──────┘
+                                               ▼
+                              server.js: registry di memori (satu-satunya penulis)
+                               ├─ state.json (disimpan berkala)
+                               ├─ broadcast SSE / socket.io / webhook
+                               └─ dashboard, REST API, MCP tools (login / api token)
 ```
 
-File runtime (tidak di-commit): `%TEMP%/claude-agent-monitor/` berisi
-`state.json` (agent, event, webhook, transports), `server.json` (pid, port,
-host), `monitor.log` (log rotasi 100 KB — lihat ini bila server bermasalah).
+Sejak v0.6.0 hook tidak lagi menulis `state.json` langsung. Semua event dikirim ke server dan diproses berurutan. Karena itu event tool yang datang terlambat tidak bisa lagi mengubah agent yang sudah `done` kembali menjadi `running`, dan event paralel tidak saling menimpa.
+
+File runtime (tidak di-commit) ada di `%TEMP%/claude-agent-monitor/`:
+- `state.json`: agent, sesi, event, webhook, transports
+- `server.json`: pid, port, host
+- `auth.json`: password dan token
+- `monitor.log`: log yang dirotasi pada 100 KB. Lihat file ini kalau server bermasalah.
 
 ### Kenapa "Claude nyala tapi server mati"?
 
@@ -319,16 +417,17 @@ mati. `UserPromptSubmit` berjalan `--quiet` (hanya tulis log, tidak
 mencetak ke terminal) dan pesan dashboard hanya muncul sekali saat sesi
 dimulai.
 
+`ensure-server.js` juga tidak lagi membunuh proses berdasarkan pid lama. Setelah reboot, pid itu bisa milik program lain. Port yang menjawab lambat dianggap terpakai, bukan kosong. Pada `UserPromptSubmit` (`--quiet`), hanya port yang tersimpan yang dicek, jadi prompt tidak pernah tertahan oleh pemindaian port.
+
 ---
 
 ## 🧪 Test manual (tanpa spawn agent asli)
 
 ```powershell
-$env:AGENT_MONITOR_PORT='9761'
-Start-Process node -ArgumentList 'plugins\agent-monitoring\server.js' -WindowStyle Hidden
-Start-Sleep 3
-1..5 | % { (@{agent_id="test-agent-$_"; agent_type="Explore"} | ConvertTo-Json -Compress) | node 'plugins\agent-monitoring\hooks\record.js' start }
-Invoke-RestMethod http://127.0.0.1:9761/api/agents | % agents | ft agent_id, agent_type, status
+node plugins\agent-monitoring\hooks\ensure-server.js
+1..5 | % { (@{session_id="11111111-2222-3333-4444-555555555555"; agent_id="test-agent-$_"; agent_type="Explore"} | ConvertTo-Json -Compress) | node plugins\agent-monitoring\hooks\report.js subagent-start }
+$tok = (Get-Content "$env:TEMP\claude-agent-monitor\auth.json" | ConvertFrom-Json).api_token
+(Invoke-RestMethod http://127.0.0.1:9761/api/agents -Headers @{Authorization="Bearer $tok"}).agents | ft agent_id, agent_type, status
 ```
 
 ---
@@ -345,18 +444,24 @@ agent-visibility/
    ├─ .mcp.json                             ← MCP server agent-monitor
    ├─ package.json                          ← socket.io (opsional, sudah terinstal)
    ├─ server.js                             ← dashboard + REST + SSE + socket.io
-   ├─ mcp-server.js                         ← 9 MCP tools (stdio)
-   ├─ approval-mcp.js                       ← permission-prompt tool: Approve/Reject/YOLO dari dashboard
+   ├─ mcp-server.js                         ← 10 MCP tools (stdio), lewat REST API
+   ├─ approval-mcp.js                       ← permission-prompt tool: Approve/Reject/YOLO dari dashboard (pakai run secret)
    ├─ hooks/
-   │  ├─ hooks.json                         ← SessionStart, UserPromptSubmit, SubagentStart/Stop, PostToolUse
-   │  ├─ ensure-server.js                   ← auto-start + aturan port + watchdog
-   │  ├─ record.js                          ← catat spawn/stop
-   │  └─ activity.js                        ← catat tool/file per agent
-   └─ lib/
-      ├─ store.js                          ← state.json, webhook POST, stdin JSON
-      ├─ chat.js                           ← Prompt API: run claude -p, approvals, YOLO
-      └─ agentinfo.js                      ← baca transcript subagent untuk panel detail
-   └─ public/pixel.js                       ← tampilan Pixel office (canvas 2D)
+   │  ├─ hooks.json                         ← SessionStart, UserPromptSubmit, SubagentStart/Stop, PostToolUse, SessionEnd
+   │  ├─ ensure-server.js                   ← auto-start server lokal + aturan port (dilewati kalau AGENT_MONITOR_URL diset)
+   │  └─ report.js                          ← kirim event hook ke POST /api/ingest
+   ├─ lib/
+   │  ├─ store.js                          ← path state, state.json, webhook POST, stdin JSON
+   │  ├─ registry.js                       ← sesi + agent di memori, satu-satunya penulis state
+   │  ├─ auth.js                           ← auth.json, password, token, cookie login
+   │  ├─ client.js                         ← HTTP client untuk hook dan MCP (lokal atau server pusat)
+   │  ├─ summarize.js                      ← ringkasan satu baris per tool call
+   │  ├─ chat.js                           ← Prompt API: run claude -p, approvals, YOLO
+   │  └─ agentinfo.js                      ← baca transcript subagent untuk panel detail
+   └─ public/
+      ├─ index.html                        ← dashboard
+      ├─ login.html                        ← halaman login
+      └─ pixel.js                          ← tampilan Pixel office (canvas 2D)
 ```
 
 ---
@@ -368,8 +473,11 @@ agent-visibility/
 | Dashboard tidak bisa dibuka | Cek `%TEMP%/claude-agent-monitor/monitor.log`; pastikan sesi Claude baru dimulai (SessionStart). Prompt berikutnya menyalakan ulang via watchdog |
 | Port 9761 dipakai app lain | Otomatis pindah 9762+ — lihat URL di terminal saat sesi mulai |
 | Agent tidak tercatat | Hook `SubagentStart` butuh sesi baru setelah install/update plugin |
-| `activity` kosong | Hook `PostToolUse` hanya mencatat tool Read/Write/Edit/Bash/Glob/Grep/Task/TodoWrite/WebFetch/WebSearch; sesi utama (tanpa agent_id) tidak dilacak |
+| `activity` kosong | Hook `PostToolUse` hanya mencatat tool Read/Write/Edit/Bash/PowerShell/Glob/Grep/Task/Agent/TodoWrite/WebFetch/WebSearch. Tool di sesi utama membuat sesinya `busy`, tapi tidak membuat agent |
 | socket.io "not installed" | `npm install` di `plugins/agent-monitoring/` |
+| Lupa password dashboard | Lihat `auth.json` di folder state, atau set `AGENT_MONITOR_PASSWORD` lalu restart server |
+| Client di mesin lain tidak muncul | Cek `AGENT_MONITOR_URL` bisa diakses dari mesin itu dan `AGENT_MONITOR_CLIENT_TOKEN` sama dengan `client_token` server. Pesan `reporting to …` atau `not reachable` muncul di awal sesi |
+| MCP tools `rejected the API token` | Untuk server pusat, set `AGENT_MONITOR_TOKEN` ke `api_token` server |
 | Data lama menumpuk | Hapus `%TEMP%/claude-agent-monitor/state.json` (atau seluruh foldernya) |
 
 ---

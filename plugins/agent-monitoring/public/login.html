@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agent Office Login</title>
+<style>
+:root{color-scheme:light dark}
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:0;min-height:100vh;display:grid;place-items:center;background:#1b1626;color:#f5f5f5}
+.box{width:min(340px,calc(100vw - 32px));border:2px solid #7a6690;border-radius:10px;padding:24px;background:#241d33}
+h1{font-size:18px;margin:0 0 4px;font-family:ui-monospace,Consolas,monospace;letter-spacing:.04em}
+p{font-size:13px;opacity:.7;margin:0 0 18px;line-height:1.5}
+label{font-size:13px;display:block;margin-bottom:6px}
+input{width:100%;box-sizing:border-box;padding:10px;border-radius:8px;border:1px solid #7a6690;background:#1b1626;color:inherit;font-size:15px}
+button{margin-top:12px;width:100%;padding:10px;border-radius:8px;border:0;background:#4493f8;color:#fff;font-size:15px;cursor:pointer}
+button:disabled{opacity:.6;cursor:wait}
+#err{color:#ff7b72;font-size:13px;min-height:18px;margin-top:10px}
+code{font-family:ui-monospace,Consolas,monospace;font-size:12px}
+</style></head><body>
+<form class="box" id="f">
+<h1>AGENT OFFICE</h1>
+<p>Masukkan password dashboard. Password ada di <code>auth.json</code> di folder state server, atau di env <code>AGENT_MONITOR_PASSWORD</code>.</p>
+<label for="pw">Password</label>
+<input id="pw" type="password" autocomplete="current-password" autofocus required>
+<button id="go" type="submit">Masuk</button>
+<div id="err" role="alert"></div>
+</form>
+<script>
+const f=document.getElementById('f'),pw=document.getElementById('pw'),go=document.getElementById('go'),err=document.getElementById('err');
+f.onsubmit=async e=>{e.preventDefault();go.disabled=true;err.textContent='';
+ try{const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:pw.value})});
+  if(r.ok){location.href='/';return;}
+  const j=await r.json().catch(()=>({}));err.textContent=j.error||('login gagal ('+r.status+')');pw.select();
+ }catch(x){err.textContent='server tidak bisa dihubungi';}
+ go.disabled=false;};
+</script>
+</body></html>

@@ -1,54 +1,48 @@
 {
-  "description": "Agent monitoring hooks: start dashboard server and track subagents",
+  "description": "Agent monitoring: start the local monitor server (unless AGENT_MONITOR_URL points to a remote one) and report sessions, prompts, subagents and tool calls to it",
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/ensure-server.js\""
-          }
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/ensure-server.js\"" },
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/report.js\" session-start" }
         ]
       }
     ],
     "UserPromptSubmit": [
       {
         "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/ensure-server.js\" --quiet"
-          }
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/ensure-server.js\" --quiet" },
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/report.js\" prompt" }
         ]
       }
     ],
     "SubagentStart": [
       {
         "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/record.js\" start"
-          }
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/report.js\" subagent-start" }
         ]
       }
     ],
     "SubagentStop": [
       {
         "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/record.js\" stop"
-          }
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/report.js\" subagent-stop" }
         ]
       }
     ],
     "PostToolUse": [
       {
-        "matcher": "Read|Write|Edit|Bash|Glob|Grep|Task|TodoWrite|WebFetch|WebSearch",
+        "matcher": "Read|Write|Edit|Bash|PowerShell|Glob|Grep|Task|Agent|TodoWrite|WebFetch|WebSearch",
         "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/activity.js\""
-          }
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/report.js\" tool" }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/report.js\" session-end" }
         ]
       }
     ]

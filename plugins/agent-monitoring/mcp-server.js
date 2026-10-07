@@ -1,143 +1,96 @@
 "use strict";
-// MCP server (stdio) exposing agent-monitor tools. No dependencies.
-const { loadState, saveState, loadServerInfo } = require("./lib/store");
+// MCP server (stdio) exposing agent-monitor tools. Talks to the monitor
+// server over its REST API (local, or AGENT_MONITOR_URL), so it works
+// the same against a central server. No dependencies.
+const { api, baseUrl } = require("./lib/client");
 
 function tool(name, description, inputSchema, handler) {
   return { name, description, inputSchema, handler };
 }
 
-function runningFilter(agents, status) {
-  if (!status || status === "all") return agents;
-  return agents.filter((a) => a.status === status);
+async function call(method, path, body) {
+  const r = await api(method, path, body);
+  if (r.status === 0) throw new Error(`monitor server ${baseUrl()} not reachable: ${r.error}`);
+  if (r.status === 401) throw new Error("monitor server rejected the API token (set AGENT_MONITOR_TOKEN for a remote server)");
+  if (r.status >= 400) throw new Error((r.body && r.body.error) || `HTTP ${r.status}`);
+  return r.body;
 }
 
 const TOOLS = [
   tool(
     "agents_list",
-    "List recorded Claude Code subagents (running and finished).",
-    {
-      type: "object",
-      properties: {
-        status: { type: "string", enum: ["all", "running", "done"] },
-      },
-    },
-    (args) => {
-      const s = loadState();
-      const agents = runningFilter(Object.values(s.agents), args.status || "all");
-      return { agents, count: agents.length };
+    "List recorded Claude Code subagents (running and finished), across every connected Claude Code session.",
+    { type: "object", properties: { status: { type: "string", enum: ["all", "running", "done"] } } },
+    async (args) => {
+      const { agents } = await call("GET", "/api/agents");
+      const st = args.status || "all";
+      const list = st === "all" ? agents : agents.filter((a) => a.status === st);
+      return { agents: list, count: list.length };
     }
   ),
   tool(
     "agents_get",
-    "Get detail of one subagent by agent_id.",
-    {
-      type: "object",
-      properties: { agent_id: { type: "string" } },
-      required: ["agent_id"],
-    },
-    (args) => {
-      const s = loadState();
-      const agent = s.agents[args.agent_id];
-      if (!agent) throw new Error(`unknown agent_id: ${args.agent_id}`);
-      return { agent };
-    }
+    "Get detail of one subagent by agent_id: task, every tool call with result, final answer.",
+    { type: "object", properties: { agent_id: { type: "string" } }, required: ["agent_id"] },
+    (args) => call("GET", "/api/agents/" + encodeURIComponent(args.agent_id))
+  ),
+  tool(
+    "sessions_list",
+    "List connected Claude Code sessions (clients): host, folder, ready/busy/offline, agents running.",
+    { type: "object", properties: {} },
+    () => call("GET", "/api/sessions")
   ),
   tool(
     "monitor_status",
-    "Monitor server status: port, pid, uptime, agent counts.",
+    "Monitor server status: URL, port, pid, uptime, sessions online, agent counts.",
     { type: "object", properties: {} },
-    () => {
-      const s = loadState();
-      const info = loadServerInfo() || {};
-      const agents = Object.values(s.agents);
+    async () => {
+      const r = await call("GET", "/api/agents");
+      const live = r.sessions.filter((s) => s.status === "ready" || s.status === "busy");
       return {
-        port: info.port || null,
-        pid: info.pid || null,
-        started_at: info.started_at || null,
-        state_updated_at: s.updated_at,
-        running: agents.filter((a) => a.status === "running").length,
-        done: agents.filter((a) => a.status === "done").length,
-        webhooks: s.webhooks.length,
+        url: baseUrl(),
+        port: r.server.port,
+        host: r.server.host,
+        pid: r.server.pid,
+        started_at: r.server.started_at,
+        sessions_online: live.length,
+        sessions_total: r.sessions.length,
+        running: r.agents.filter((a) => a.status === "running").length,
+        done: r.agents.filter((a) => a.status === "done").length,
+        webhooks: (r.webhooks || []).length,
       };
     }
   ),
   tool(
     "events_recent",
     "Recent spawn/stop events.",
-    {
-      type: "object",
-      properties: { limit: { type: "number" } },
-    },
-    (args) => {
-      const s = loadState();
-      const limit = Math.min(Number(args.limit || 20), 200);
-      return { events: s.events.slice(-limit).reverse() };
-    }
+    { type: "object", properties: { limit: { type: "number" } } },
+    (args) => call("GET", "/api/events?limit=" + Math.min(Number(args.limit || 20), 200))
   ),
   tool(
     "webhook_add",
     "Register a webhook URL to receive agent.spawn / agent.stop POSTs.",
-    {
-      type: "object",
-      properties: { url: { type: "string" } },
-      required: ["url"],
-    },
-    (args) => {
-      if (!/^https?:\/\//.test(args.url)) throw new Error("url must start with http(s)://");
-      const s = loadState();
-      if (!s.webhooks.includes(args.url)) {
-        s.webhooks.push(args.url);
-        saveState(s);
-      }
-      return { webhooks: s.webhooks };
-    }
+    { type: "object", properties: { url: { type: "string" } }, required: ["url"] },
+    (args) => call("POST", "/api/webhooks", { url: args.url })
   ),
-  tool(
-    "webhook_list",
-    "List registered webhook URLs.",
-    { type: "object", properties: {} },
-    () => ({ webhooks: loadState().webhooks })
-  ),
+  tool("webhook_list", "List registered webhook URLs.", { type: "object", properties: {} }, () => call("GET", "/api/webhooks")),
   tool(
     "webhook_remove",
     "Remove a registered webhook URL.",
-    {
-      type: "object",
-      properties: { url: { type: "string" } },
-      required: ["url"],
-    },
-    (args) => {
-      const s = loadState();
-      s.webhooks = s.webhooks.filter((w) => w !== args.url);
-      saveState(s);
-      return { webhooks: s.webhooks };
-    }
+    { type: "object", properties: { url: { type: "string" } }, required: ["url"] },
+    (args) => call("DELETE", "/api/webhooks", { url: args.url })
   ),
-  tool(
-    "transports_get",
-    "Get which transports are enabled (webhook, sse, socketio).",
-    { type: "object", properties: {} },
-    () => ({ transports: loadState().transports })
+  tool("transports_get", "Get which transports are enabled (webhook, sse, socketio).", { type: "object", properties: {} }, () =>
+    call("GET", "/api/transports")
   ),
   tool(
     "transports_set",
     "Enable/disable transports: webhook (outbound POST), sse (GET /api/stream), socketio.",
     {
       type: "object",
-      properties: {
-        webhook: { type: "boolean" },
-        sse: { type: "boolean" },
-        socketio: { type: "boolean" },
-      },
+      properties: { webhook: { type: "boolean" }, sse: { type: "boolean" }, socketio: { type: "boolean" } },
     },
-    (args) => {
-      const s = loadState();
-      for (const k of ["webhook", "sse", "socketio"]) {
-        if (typeof args[k] === "boolean") s.transports[k] = args[k];
-      }
-      saveState(s);
-      return { transports: s.transports };
-    }
+    (args) => call("POST", "/api/transports", args)
   ),
 ];
 

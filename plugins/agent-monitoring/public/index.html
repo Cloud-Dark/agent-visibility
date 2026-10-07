@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Claude Agent Monitor</title>
+<style>
+:root{color-scheme:light dark}
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:0 auto;max-width:960px;padding:24px;background:Canvas;color:CanvasText}
+h1{font-size:22px;margin:0 0 4px}.sub{opacity:.65;font-size:13px;margin-bottom:20px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}
+.card{border:1px solid GrayText;border-radius:10px;padding:12px 14px}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px}
+.running{background:#22c55e}.done{background:#6b7280}
+.mono{font-family:ui-monospace,Consolas,monospace;font-size:12px;word-break:break-all}
+table{width:100%;border-collapse:collapse;font-size:13px;margin-top:20px}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid GrayText}
+form{margin-top:20px;display:flex;gap:8px}
+input{flex:1;padding:8px;border-radius:8px;border:1px solid GrayText}
+button{padding:8px 14px;border-radius:8px;border:1px solid GrayText;cursor:pointer}
+#err{color:#ef4444;font-size:13px}
+.pills{display:flex;gap:8px;margin:12px 0;flex-wrap:wrap}
+.pill{border:1px solid GrayText;border-radius:20px;padding:6px 12px;font-size:13px;cursor:pointer;background:none;color:inherit}
+.pill.on{background:#22c55e;color:#fff;border-color:#22c55e}
+#chatlog{border:1px solid GrayText;border-radius:10px;padding:10px;height:320px;overflow:auto;font-size:13px;display:flex;flex-direction:column;gap:6px}
+.msg{padding:6px 10px;border-radius:8px;white-space:pre-wrap;word-break:break-word;max-width:90%}
+.msg.user{align-self:flex-end;background:#2563eb;color:#fff}
+.msg.assistant{align-self:flex-start;border:1px solid GrayText}
+.msg.tool{align-self:flex-start;opacity:.7;font-family:ui-monospace,Consolas,monospace;font-size:12px}
+.msg.error{align-self:flex-start;color:#ef4444;font-family:ui-monospace,Consolas,monospace;font-size:12px}
+#chatform{margin-top:8px}
+#approvals{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+.appr{border:2px solid #f59e0b;border-radius:10px;padding:10px 12px;font-size:13px}
+.appr .cmd{font-family:ui-monospace,Consolas,monospace;font-size:12px;white-space:pre-wrap;word-break:break-all;background:rgba(127,127,127,.12);padding:6px 8px;border-radius:6px;margin:6px 0}
+.appr button{margin-right:6px}.ok{background:#16a34a;color:#fff;border-color:#16a34a}.no{background:#dc2626;color:#fff;border-color:#dc2626}
+#yolo.on{background:#dc2626;color:#fff;border-color:#dc2626}
+#chatmeta{font-size:12px;opacity:.65;margin-top:6px}
+#streambox{border:1px solid GrayText;border-radius:10px;padding:10px;height:140px;overflow:auto;font-size:12px}
+.views{display:flex;gap:6px;margin:10px 0 4px}
+.views button.on{background:#4493f8;color:#fff;border-color:#4493f8}
+#pixelwrap{position:relative;display:none;margin-top:8px}
+#pixel{width:100%;image-rendering:pixelated;image-rendering:crisp-edges;border:2px solid #3b2f47;border-radius:6px;background:#cbb894;display:block}
+#pixeltip{position:absolute;display:none;max-width:270px;background:#1b1626;color:#f5f5f5;border:1px solid #7a6690;border-radius:6px;padding:8px 10px;font-size:12px;pointer-events:none;z-index:5}
+.legend{font-size:12px;opacity:.7;margin-top:6px}
+#detail{border:2px solid #4493f8;border-radius:10px;padding:12px 14px;margin-top:12px}
+.dhead{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+#detail h3{font-size:14px;margin:14px 0 6px}
+.dbox{white-space:pre-wrap;word-break:break-word;font-size:13px;border:1px solid GrayText;border-radius:8px;padding:8px 10px;max-height:220px;overflow:auto}
+.badge{font-size:11px;border-radius:10px;padding:2px 8px;background:#4493f8;color:#fff}
+.tl{border-left:3px solid GrayText;padding:4px 10px;margin:4px 0;font-size:12px}
+.tl.tool{border-color:#4493f8}.tl.err{border-color:#ef4444}.tl.text{border-color:#a371f7}
+.tl .res{opacity:.7;white-space:pre-wrap;word-break:break-word;margin-top:2px}
+#d-rename{margin-top:10px}
+.card{cursor:pointer}
+body.pixel-mode #agents{display:none}body.pixel-mode #pixelwrap{display:block}
+.top{display:flex;justify-content:space-between;align-items:center;gap:10px}
+.sessions{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
+.sess{border:1px solid GrayText;border-radius:10px;padding:10px 12px;font-size:13px}
+.sess .st{font-size:11px;border-radius:10px;padding:2px 8px;color:#fff}
+.st.ready{background:#3fb950}.st.busy{background:#4493f8}.st.offline,.st.ended{background:#6b7280}
+.sess .p{opacity:.75;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sess .x{float:right;font-size:11px;padding:2px 6px}
+</style></head><body>
+<div class="top"><h1>&#129302; Claude Agent Monitor</h1><button type="button" id="logout">Logout</button></div>
+<div class="sub" id="meta">loading…</div>
+<h2>Claude Code sessions (<span id="sesscount">0</span>)</h2>
+<div class="sessions" id="sessions"></div>
+<h2>Prompt Claude Code</h2>
+<div id="chatlog"></div>
+<form id="chatform"><input id="prompt" placeholder="Tulis prompt, Enter untuk kirim" autocomplete="off" required>
+<button type="submit" id="sendbtn">Send</button><button type="button" id="newchat">New chat</button><button type="button" id="yolo" title="Auto-approve every tool call">YOLO: off</button></form>
+<div id="approvals"></div>
+<div id="chatmeta"></div>
+<h2>Connection</h2>
+<div class="pills" id="transports"></div>
+<div class="mono" style="margin-bottom:8px">SSE: <span id="sse">/api/stream</span> · socket.io: <span id="sio">n/a</span></div>
+<h2>Agents (<span id="count">0</span>)</h2>
+<div class="views"><button type="button" id="v-text">Text</button><button type="button" id="v-pixel">Pixel office</button></div>
+<div class="grid" id="agents"></div>
+<div id="detail" hidden><div class="dhead"><div><b id="d-name"></b> <span id="d-status" class="badge"></span><div class="mono" id="d-sub"></div></div>
+<button type="button" id="d-close">Close</button></div>
+<form id="d-rename"><input id="d-newname" maxlength="40" placeholder="Beri nama agent ini (kosongkan untuk reset)"><button type="submit">Save name</button></form>
+<h3>Tugas</h3><div id="d-task" class="dbox"></div>
+<h3>Yang dikerjakan (<span id="d-count">0</span>)</h3><div id="d-timeline"></div>
+<div id="d-result-wrap"><h3>Hasil akhir</h3><div id="d-result" class="dbox"></div></div></div>
+<div id="pixelwrap"><canvas id="pixel" width="320" height="200"></canvas><div id="pixeltip"></div>
+<label class="legend"><input type="checkbox" id="showdone"> show finished agents</label>
+<div class="legend">Coding Lab: read/edit/think · Deploy Room: bash/build · Studio: web/content · Lounge: idle (tidak ada aktivitas 2 menit). Agent yang selesai keluar lewat pintu. Klik karakter untuk detail.</div></div>
+<h2>Live stream</h2>
+<div id="streambox" class="mono"></div>
+<h2>Recent events</h2>
+<table><thead><tr><th>Time</th><th>Event</th><th>Agent</th></tr></thead>
+<tbody id="events"></tbody></table>
+<h2>Webhooks</h2>
+<div id="hooks" class="mono"></div>
+<form id="addhook"><input id="url" placeholder="https://example.com/hook" required>
+<button type="submit">Add webhook</button></form>
+<div id="err"></div>
+<script>
+const $=id=>document.getElementById(id);
+const _fetch=window.fetch.bind(window);
+window.fetch=async(...args)=>{const r=await _fetch(...args);if(r.status===401){location.href='/login';throw new Error('login required');}return r;};
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let transports={};
+function pill(name,label){
+ const b=document.createElement('button');b.className='pill'+(transports[name]?' on':'');b.textContent=label+(transports[name]?' ✓':' ✕');
+ b.onclick=async()=>{transports[name]=!transports[name];
+  await fetch('/api/transports',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(transports)});
+  load();};return b;}
+async function load(){
+ try{
+  const [a,e,t]=await Promise.all([(await fetch('/api/agents')).json(),(await fetch('/api/events?limit=30')).json(),(await fetch('/api/transports')).json()]);
+  transports=t.transports;
+  $('meta').textContent='host '+a.server.host+' · port '+a.server.port+' · up since '+a.server.started_at+' · updated '+a.server.state_updated_at+((a.server.lan_ips||[]).map(ip=>' · Network: http://'+ip+':'+a.server.port).join(''));
+  $('count').textContent=a.agents.length;
+  const ss=a.sessions||[];const live=ss.filter(x=>x.status==='ready'||x.status==='busy');
+  $('sesscount').textContent=live.length+' online'+(ss.length>live.length?' · '+(ss.length-live.length)+' offline':'');
+  $('sessions').innerHTML=ss.map(x=>'<div class="sess">'+(x.status==='offline'||x.status==='ended'?'<button type="button" class="x" data-forget="'+esc(x.session_id)+'">forget</button>':'')+'<b>'+esc(x.name||(x.cwd||'').split(/[\\/]/).pop()||'session')+'</b> <span class="st '+esc(x.status)+'">'+esc(x.status)+'</span>'
+   +'<div class="mono">'+esc(x.host||'?')+' · '+esc(x.cwd||'')+'</div>'
+   +'<div class="mono">agents: '+x.agents_running+' running / '+x.agents_total+' total · prompts: '+(x.prompts||0)+'</div>'
+   +(x.last_prompt?'<div class="p">&gt; '+esc(x.last_prompt)+'</div>':'')+'</div>').join('')||'<p class="mono">Belum ada Claude Code yang terhubung. Buka Claude Code dengan plugin ini aktif, atau set AGENT_MONITOR_URL di mesin lain.</p>';
+  if(window.pixelOffice&&window.pixelOffice.setSessions)window.pixelOffice.setSessions(ss);
+  if(window.pixelOffice){window.pixelOffice.setShowDone(showDone);window.pixelOffice.update(a.agents);}
+  const tp=$('transports');tp.innerHTML='';
+  tp.append(pill('webhook','webhook'),pill('sse','SSE stream'),pill('socketio','socket.io'));
+  $('sio').textContent=a.server.socketio?'enabled':'not installed';
+  $('agents').innerHTML=a.agents.map(x=>
+   `<div class="card" data-id="${esc(x.agent_id)}"><span class="dot ${esc(x.status)}"></span><b>${esc(x.name||x.description||x.agent_type||'agent')}</b> · ${x.status}<br><span class="mono">${esc(x.agent_type||'agent')}</span><br><span class="mono">${esc(x.agent_id)}</span><br><span class="mono">start: ${x.started_at||'-'}<br>stop: ${x.stopped_at||'-'}</span>${x.last_summary?'<br><b>doing:</b> <span class="mono">'+esc(x.last_summary)+'</span>':''}${x.files_touched&&x.files_touched.length?'<br><span class="mono">files: '+x.files_touched.slice(-3).map(esc).join(', ')+(x.files_touched.length>3?' (+'+(x.files_touched.length-3)+' more)':'')+'</span>':''}${x.activity&&x.activity.length?'<details><summary class="mono">activity ('+x.activity.length+')</summary>'+x.activity.slice(-10).reverse().map(a=>'<div class="mono">'+a.ts.slice(11,19)+' · '+esc(a.tool)+' — '+esc(a.summary)+'</div>').join('')+'</details>':''}</div>`).join('')||'<p>No agents recorded yet.</p>';
+  $('events').innerHTML=e.events.map(ev=>`<tr><td class="mono">${ev.ts}</td><td>${esc(ev.type)}</td><td class="mono">${esc(ev.agent_id)}</td></tr>`).join('');
+  $('hooks').textContent=(a.webhooks||[]).join('\n')||'(none)';
+  $('err').textContent='';
+ }catch(err){$('err').textContent='fetch failed: '+err.message;}
+}
+$('addhook').onsubmit=async ev=>{ev.preventDefault();
+ const r=await fetch('/api/webhooks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:$('url').value})});
+ if(r.ok){$('url').value='';load();}else{$('err').textContent='invalid webhook url';}};
+const chatHeaders={'Content-Type':'application/json'};
+function addMsg(role,text){const d=document.createElement('div');d.className='msg '+role;d.textContent=text;$('chatlog').append(d);$('chatlog').scrollTop=$('chatlog').scrollHeight;}
+function setBusy(b){$('sendbtn').disabled=b;$('sendbtn').textContent=b?'Running…':'Send';}
+async function loadChat(){
+ try{const r=await fetch('/api/chat');const c=await r.json();
+  if(!r.ok){$('chatmeta').textContent=c.error;$('prompt').disabled=true;return;}
+  $('chatlog').innerHTML='';c.messages.forEach(m=>addMsg(m.role,m.text));setBusy(c.busy);
+  $('chatmeta').textContent='cwd: '+c.cwd+' · mode: '+c.permission_mode+' · session: '+(c.session_id||'(new)');renderYolo(c.yolo);
+ }catch(e){$('chatmeta').textContent='chat unavailable: '+e.message;}
+}
+$('chatform').onsubmit=async ev=>{ev.preventDefault();const text=$('prompt').value.trim();if(!text)return;
+ setBusy(true);const r=await fetch('/api/chat',{method:'POST',headers:chatHeaders,body:JSON.stringify({text})});
+ if(r.ok){$('prompt').value='';}else{const e=await r.json();addMsg('error',e.error);setBusy(false);}};
+$('newchat').onclick=async()=>{await fetch('/api/chat',{method:'DELETE'});loadChat();};
+loadChat();
+function renderYolo(on){const b=$('yolo');b.classList.toggle('on',on);b.textContent='YOLO: '+(on?'ON':'off');}
+$('yolo').onclick=async()=>{const on=!$('yolo').classList.contains('on');
+ if(on&&!confirm('YOLO mode: semua tool (Bash, git, edit file, dll) langsung diizinkan tanpa tanya. Lanjut?'))return;
+ const r=await (await fetch('/api/yolo',{method:'POST',headers:chatHeaders,body:JSON.stringify({yolo:on})})).json();renderYolo(r.yolo);};
+function apprCard(a){
+ if(document.getElementById('ap-'+a.id))return;
+ const d=document.createElement('div');d.className='appr';d.id='ap-'+a.id;
+ d.innerHTML='<b>Izin diminta:</b> '+esc(a.tool_name)+(a.source!=='dashboard'?' <span class="mono">(api run '+esc(String(a.run_id).slice(0,8))+')</span>':'')+'<div class="cmd">'+esc(a.summary)+'</div>';
+ const ok=document.createElement('button');ok.className='ok';ok.textContent='Approve';
+ const no=document.createElement('button');no.className='no';no.textContent='Reject';
+ const decide=async(v)=>{ok.disabled=no.disabled=true;await fetch('/api/approvals/'+a.id,{method:'POST',headers:chatHeaders,body:JSON.stringify({decision:v})});};
+ ok.onclick=()=>decide('allow');no.onclick=()=>decide('deny');
+ d.append(ok,no);$('approvals').append(d);}
+function apprDone(a){const d=document.getElementById('ap-'+a.id);if(d)d.remove();
+ if(a.source==='dashboard')addMsg(a.status==='allowed'?'tool':'error',(a.status==='allowed'?'✓ approved: ':'✕ rejected: ')+a.tool_name+' '+a.summary.slice(0,120));}
+async function loadApprovals(){try{const r=await (await fetch('/api/approvals?status=pending')).json();
+ $('approvals').innerHTML='';(r.approvals||[]).forEach(apprCard);renderYolo(r.yolo);}catch(e){}}
+loadApprovals();
+async function loadChatMeta(){try{const c=await (await fetch('/api/chat')).json();$('chatmeta').textContent='cwd: '+c.cwd+' · mode: '+c.permission_mode+' · session: '+(c.session_id||'(new)');}catch(e){}}
+let detailId=null;
+async function openDetail(id){detailId=id;$('detail').hidden=false;
+ try{const r=await (await fetch('/api/agents/'+encodeURIComponent(id))).json();if(r.error){$('d-task').textContent=r.error;return;}
+  const a=r.agent,d=r.detail;
+  $('d-name').textContent=a.name||a.description||a.agent_type||'agent';
+  $('d-status').textContent=a.status+(a.stale?' (idle)':'');
+  $('d-sub').textContent=(a.agent_type||'agent')+' · '+a.agent_id+' · start '+(a.started_at||'-')+(a.stopped_at?' · stop '+a.stopped_at:'');
+  if(document.activeElement!==$('d-newname'))$('d-newname').value=a.name||'';
+  $('d-task').textContent=d.task||(d.description?'(prompt belum tersedia) '+d.description:'(prompt tidak tersedia: transcript agent tidak ditemukan)');
+  $('d-count').textContent=d.tool_count+' tool';
+  $('d-timeline').innerHTML=(d.truncated?'<div class="mono">… '+d.truncated+' langkah awal disembunyikan</div>':'')+d.timeline.map(t=>t.kind==='tool'
+   ?'<div class="tl tool'+(t.is_error?' err':'')+'"><span class="mono">'+esc(String(t.ts||'').slice(11,19))+'</span> <b>'+esc(t.tool)+'</b> <span class="mono">'+esc(t.input)+'</span>'+(t.result?'<div class="res mono">'+esc(t.result)+'</div>':'')+'</div>'
+   :'<div class="tl text"><span class="mono">'+esc(String(t.ts||'').slice(11,19))+'</span> '+esc(t.text)+'</div>').join('')||'<div class="mono">(belum ada aktivitas)</div>';
+  $('d-result-wrap').hidden=!d.result;$('d-result').textContent=d.result||'';
+ }catch(e){$('d-task').textContent='gagal memuat: '+e.message;}}
+$('d-close').onclick=()=>{detailId=null;$('detail').hidden=true;};
+$('d-rename').onsubmit=async ev=>{ev.preventDefault();if(!detailId)return;
+ await fetch('/api/agents/'+encodeURIComponent(detailId)+'/name',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:$('d-newname').value})});
+ $('d-newname').blur();openDetail(detailId);load();};
+$('agents').onclick=ev=>{const c=ev.target.closest('.card');if(c&&c.dataset.id)openDetail(c.dataset.id);};
+window.openAgentDetail=openDetail;
+setInterval(()=>{if(detailId&&document.activeElement!==$('d-newname'))openDetail(detailId);},4000);
+let showDone=false;try{showDone=localStorage.getItem('agentmon-showdone')==='1';}catch(e){}
+$('showdone').checked=showDone;
+$('showdone').onchange=()=>{showDone=$('showdone').checked;try{localStorage.setItem('agentmon-showdone',showDone?'1':'0');}catch(e){}if(window.pixelOffice)window.pixelOffice.setShowDone(showDone);};
+function setView(v){document.body.classList.toggle('pixel-mode',v==='pixel');$('v-text').classList.toggle('on',v!=='pixel');$('v-pixel').classList.toggle('on',v==='pixel');try{localStorage.setItem('agentmon-view',v);}catch(e){}}
+$('v-text').onclick=()=>setView('text');$('v-pixel').onclick=()=>setView('pixel');
+let savedView='pixel';try{savedView=localStorage.getItem('agentmon-view')||'pixel';}catch(e){}
+setView(savedView);
+$('logout').onclick=async()=>{await fetch('/api/logout',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});location.href='/login';};
+$('sessions').onclick=async ev=>{const b=ev.target.closest('[data-forget]');if(!b)return;await fetch('/api/sessions/'+encodeURIComponent(b.dataset.forget),{method:'DELETE'});load();};
+load();setInterval(load,3000);
+try{
+ const es=new EventSource('/api/stream');
+ es.onmessage=ev=>{let p={};try{p=JSON.parse(ev.data);}catch(e){}
+  if(p.event==='approval.pending'){apprCard(p.approval);return;}
+  if(p.event==='approval.resolved'){apprDone(p.approval);return;}
+  if(p.event==='approval.auto'){if(p.approval.source==='dashboard')addMsg('tool','⚡ YOLO: '+p.approval.tool_name+' '+p.approval.summary.slice(0,120));return;}
+  if(p.event==='yolo'){renderYolo(p.yolo);return;}
+  if(p.event&&p.event.startsWith('chat.')){
+   if(p.source!=='dashboard'){const d=document.createElement('div');d.textContent=new Date().toLocaleTimeString()+' [api '+String(p.run_id).slice(0,8)+'] '+p.event+(p.text?' '+p.text.slice(0,120):'');$('streambox').prepend(d);return;}
+   if(p.event==='chat.user')addMsg('user',p.text);
+   else if(p.event==='chat.assistant')addMsg('assistant',p.text);
+   else if(p.event==='chat.tool')addMsg('tool','→ '+p.text);
+   else if(p.event==='chat.error')addMsg('error',p.text);
+   else if(p.event==='chat.done'){setBusy(false);loadChatMeta();}
+   return;}
+  const d=document.createElement('div');d.textContent=new Date().toLocaleTimeString()+' '+ev.data;$('streambox').prepend(d);};
+ es.onerror=()=>{};
+}catch(e){}
+</script><script src="/pixel.js"></script></body></html>

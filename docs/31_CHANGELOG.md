@@ -6,6 +6,7 @@
 ## Contents
 
 - [Unreleased](#unreleased)
+- [0.6.0](#060)
 - [0.5.0](#050)
 - [0.4.1](#041)
 - [0.4.0](#040)
@@ -18,6 +19,38 @@ This changelog follows Keep a Changelog format.
 ## Unreleased
 
 - None.
+
+## 0.6.0
+
+Date: 2026-10-07
+
+### Added
+
+- Central server mode. Every Claude Code session with the plugin is a client. Hooks report session-start, prompt, subagent-start, subagent-stop, tool, and session-end to POST /api/ingest. AGENT_MONITOR_URL points clients at a server on another machine; when it is set, no local server is started.
+- Sessions panel on the dashboard ("Claude Code sessions (N online)"): host, folder, ready/busy/offline, running agents, last prompt. GET /api/sessions, DELETE /api/sessions/<id>, MCP tool sessions_list, CLAUDE counter in the pixel office.
+- Dashboard login with password and an HttpOnly, SameSite=Strict signed cookie (30 days), logout button, login rate limit.
+- auth.json in the state folder with password, api_token, client_token, and cookie secret, created on first start. Env overrides: AGENT_MONITOR_PASSWORD, AGENT_MONITOR_TOKEN, AGENT_MONITOR_CLIENT_TOKEN.
+- AGENT_MONITOR_CWD_ROOTS, AGENT_MONITOR_ORIGINS, AGENT_MONITOR_SECURE_COOKIE.
+
+### Changed
+
+- The server is the only writer of state.json. Hooks (hooks/report.js) send events over HTTP and lib/registry.js applies them in order. record.js and activity.js are removed.
+- The MCP server calls the REST API instead of reading state.json, so it works against a central server.
+- Dashboard HTML moved to public/index.html. New public/login.html.
+- ensure-server.js: reuses a healthy server and adopts its pid, treats slow or non-monitor answers as occupied, never kills a process by stored pid, checks only the saved port on UserPromptSubmit.
+
+### Security
+
+- Removed the localhost exception: every endpoint except /__health and login needs the login cookie or a token. This closes a cross-site attack where any web page could enable YOLO and run a prompt.
+- Browser requests with a foreign Origin are refused, and request bodies must be application/json.
+- Each prompt run gets its own secret. Runs create and poll only their own approvals (/api/run/approvals) and can no longer approve themselves or toggle YOLO. Server tokens are not passed to runs.
+- Approval cards show the full tool input, not just the main field.
+- The MCP config for each run is written to a private temp folder (mkdtemp, mode 600) and removed when the run ends.
+- socket.io requires the login cookie or the API token.
+
+### Fixed
+
+- A late PostToolUse event no longer turns a finished agent back to running. Parallel tool events are no longer lost.
 
 ## 0.5.0
 
