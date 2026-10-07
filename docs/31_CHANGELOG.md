@@ -6,6 +6,7 @@
 ## Contents
 
 - [Unreleased](#unreleased)
+- [0.5.0](#050)
 - [0.4.1](#041)
 - [0.4.0](#040)
 - [0.3.0](#030)
@@ -17,6 +18,20 @@ This changelog follows Keep a Changelog format.
 ## Unreleased
 
 - None.
+
+## 0.5.0
+
+Date: 2026-10-07
+
+### Added
+
+- Agent detail panel: click a pixel worker or a text card to see the full spawn prompt, every tool call with its result, the agent messages, and the final answer. Read from Claude Code subagent transcripts by lib/agentinfo.js. Endpoint: GET /api/agents/<id>.
+- Custom agent names: set from the detail panel or with PUT /api/agents/<id>/name, stored in state.json. Without a custom name, the Agent tool description is used. Names show as tags above workers and on cards.
+- Front door: new agents walk in through it, and finished agents walk out and leave the office. A "show finished agents" checkbox brings them back.
+
+### Changed
+
+- The Lounge now holds only idle agents: running agents that the server marked stale after 2 minutes without a tool call. A recent tool call clears the stale flag. Finished agents no longer pile up there.
 
 ## 0.4.1
 

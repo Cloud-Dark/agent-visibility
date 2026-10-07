@@ -92,7 +92,11 @@ Bagian **Agents** di dashboard bisa ditampilkan dalam dua mode: **Text** (kartu 
 | Coding Lab | meja komputer, rak buku, whiteboard | tool terakhir Read, Edit, Write, Grep, Glob, Task, atau TodoWrite (berpikir, menulis kode) |
 | Deploy Room | rak server, monitor status, lampu BUILD/TEST/SHIP | tool terakhir Bash atau PowerShell |
 | Studio | green screen, kamera, ring light, lampu ON AIR | WebFetch, WebSearch, atau file media/konten |
-| Lounge | mesin kopi, teh, meja bundar, sofa | agent selesai, stale, atau tidak ada aktivitas lebih dari 45 detik |
+| Lounge | mesin kopi, teh, meja bundar, sofa | agent masih jalan tapi idle (server menandainya stale setelah 2 menit tanpa tool call) |
+
+Agent yang sudah selesai keluar lewat pintu di bawah lorong, jadi kantor hanya berisi agent yang masih jalan. Centang **show finished agents** untuk menampilkan agent yang sudah selesai juga.
+
+**Klik karakter** (atau kartu di mode Text) untuk membuka panel detail. Isinya: tugas lengkap yang diberikan saat agent di-spawn, setiap tool call beserta hasilnya, pesan agent, dan hasil akhir. Data ini dibaca dari transcript subagent milik Claude Code (`<session>/subagents/agent-<id>.jsonl`). Di panel itu juga ada kolom **nama**: nama yang kamu isi tersimpan di `state.json` dan muncul di atas kepala karakter. Kalau belum diberi nama, yang dipakai adalah `description` dari Agent tool, lalu tipe agent.
 
 Gelembung di atas kepala menunjukkan status: titik-titik berarti sedang berpikir, prompt terminal berarti menjalankan perintah, ikon kamera berarti di studio, centang berarti selesai, dan zzz berarti idle. Arahkan kursor ke karakter untuk melihat tipe agent, ID, dan empat aktivitas terakhirnya. Semua gambar dibuat dengan canvas (`public/pixel.js`), tanpa file gambar. Pilihan mode disimpan di browser.
 
@@ -252,6 +256,8 @@ Semua endpoint prompt, approval, dan YOLO hanya menerima request dari localhost.
 | `GET /` | Dashboard |
 | `GET /__health` | `{"monitor":"claude-agent-monitor","port":9761,"host":"…","pid":…}` — dipakai deteksi "port milik siapa" |
 | `GET /api/agents` | Daftar agent (terbaru dulu) + `server` (port, host, lan_ips, pid, uptime, socketio, transports) + webhooks + transports |
+| `GET /api/agents/<id>` | Detail satu agent: tugas, timeline tool + hasil, hasil akhir |
+| `PUT /api/agents/<id>/name` | `{"name":"Budi"}` — beri nama agent (kosong = reset) |
 | `GET /api/events?limit=50` | Event spawn/stop terakhir (maks 200, terbaru dulu) |
 | `GET /api/stream` | SSE live stream |
 | `GET /api/transports` | Status on/off ketiga transport |
@@ -348,7 +354,8 @@ agent-visibility/
    │  └─ activity.js                        ← catat tool/file per agent
    └─ lib/
       ├─ store.js                          ← state.json, webhook POST, stdin JSON
-      └─ chat.js                           ← Prompt API: run claude -p, approvals, YOLO
+      ├─ chat.js                           ← Prompt API: run claude -p, approvals, YOLO
+      └─ agentinfo.js                      ← baca transcript subagent untuk panel detail
    └─ public/pixel.js                       ← tampilan Pixel office (canvas 2D)
 ```
 

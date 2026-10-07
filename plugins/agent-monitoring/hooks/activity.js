@@ -78,6 +78,7 @@ async function main() {
     started_at: prev.started_at || now,
     last_activity_at: now,
     last_summary: summary,
+    stale: false, // active again: leave the lounge
     activity,
     files_touched: files,
   };

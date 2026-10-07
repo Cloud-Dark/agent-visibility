@@ -5,10 +5,10 @@
 //   coding lab : Read/Edit/Write/Grep/Glob/Task/TodoWrite (think, code)
 //   deploy room: Bash (build, test, git, deploy)
 //   studio     : WebFetch/WebSearch, media/content files
-//   lounge     : finished, stale, or no recent activity (idle)
+//   lounge     : running but idle (no activity for a while)
+// Finished agents leave the office (shown only with "show finished").
 (function () {
   const W = 320, H = 200;
-  const ACTIVE_MS = 45 * 1000; // newer than this = working, older = idle
 
   const C = {
     floorA: "#e9d8b4", floorB: "#e2cfa6", wall: "#5b4a6b", wallTop: "#7a6690", line: "#3b2f47",
@@ -50,6 +50,9 @@
   let agents = [];
   let frame = 0;
   let hover = null;
+  let selected = null;
+  let showDone = false; // finished agents hidden unless toggled on
+  const DONE_LINGER_MS = 20 * 1000; // a just-finished agent stays briefly, then leaves
 
   const r = (x, y, w, h, c) => {
     ctx.fillStyle = c;
@@ -69,9 +72,9 @@
   }
 
   function zoneFor(a) {
+    // Lounge is only for idle agents: running but marked stale by the
+    // server (no tool call for 2 min). A long think keeps its room.
     if (a.status !== "running" || a.stale) return "lounge";
-    const ref = Date.parse(a.last_activity_at || a.started_at || 0);
-    if (!ref || Date.now() - ref > ACTIVE_MS) return a.last_activity_at ? "lounge" : "coding";
     const t = lastTool(a);
     if (!t) return "coding";
     const tool = t.tool || "";
@@ -95,7 +98,15 @@
     const seen = new Set();
     const taken = { coding: 0, deploy: 0, lounge: 0, studio: 0 };
     // Running first so they get the best seats.
-    const ordered = [...agents].sort((a, b) => (a.status === "running" ? -1 : 1) - (b.status === "running" ? -1 : 1));
+    const now = Date.now();
+    const visible = agents.filter((a) => {
+      if (a.status === "running") return true;
+      if (showDone) return true;
+      // just finished: keep it a moment so you see it wrap up, then it leaves
+      const stop = Date.parse(a.stopped_at || 0);
+      return stop && now - stop < DONE_LINGER_MS;
+    });
+    const ordered = [...visible].sort((a, b) => (a.status === "running" ? -1 : 1) - (b.status === "running" ? -1 : 1));
     for (const a of ordered.slice(0, 32)) {
       seen.add(a.agent_id);
       const zone = zoneFor(a);
@@ -111,7 +122,7 @@
       if (!w) {
         w = {
           id: a.agent_id,
-          x: ROOMS.lounge.x + 76, y: ROOMS.lounge.y + 4,
+          x: DOOR.x, y: DOOR.y, // new agents walk in from the front door
           skin: C.skin[h % C.skin.length],
           shirt: C.shirt[(h >> 3) % C.shirt.length],
           hair: C.hair[(h >> 7) % C.hair.length],
@@ -125,16 +136,39 @@
       w.mood = moodFor(a, zone);
       w.agent = a;
     }
-    for (const id of [...workers.keys()]) if (!seen.has(id)) workers.delete(id);
+    for (const [id, w] of workers) {
+      if (seen.has(id)) continue;
+      // no longer visible: walk out of the front door, then vanish
+      w.leaving = true;
+      w.tx = DOOR.x;
+      w.ty = DOOR.y;
+      w.mood = "done";
+    }
+  }
+
+  function label4(w) {
+    const a = w.agent || {};
+    const n = a.name || a.description || a.agent_type || "agent";
+    return n.length > 14 ? n.slice(0, 13) + "…" : n;
   }
 
   // Different room: walk down/up to the hallway, along it, then into the
   // target room. Same room: walk straight to the spot.
   const HALL_Y = 108;
+  const DOOR = { x: 160, y: 199 }; // front door at the bottom of the hallway
   const roomOf = (x, y) => (y < HALL_Y ? "t" : "b") + (x < 160 ? "l" : "r");
   function step(w) {
     let gx = w.tx, gy = w.ty;
-    if (roomOf(w.x, w.y) !== roomOf(w.tx, w.ty) && Math.abs(w.y - HALL_Y) > 0.5) {
+    const toDoor = w.tx === DOOR.x && w.ty === DOOR.y;
+    if (toDoor && Math.abs(w.x - DOOR.x) <= 0.5) {
+      // in the vertical hallway: straight down to the door
+    } else if (toDoor && Math.abs(w.y - HALL_Y) <= 0.5) {
+      gx = DOOR.x; gy = HALL_Y;
+    } else if (toDoor) {
+      gx = w.x; gy = HALL_Y;
+    } else if (Math.abs(w.x - DOOR.x) <= 0.5 && w.y > HALL_Y + 0.5) {
+      gx = DOOR.x; gy = HALL_Y; // coming in from the door: up to the hallway
+    } else if (roomOf(w.x, w.y) !== roomOf(w.tx, w.ty) && Math.abs(w.y - HALL_Y) > 0.5) {
       gx = w.x; gy = HALL_Y; // leg 1: to the hallway
     } else if (Math.abs(w.y - HALL_Y) <= 0.5 && Math.abs(w.x - w.tx) > 0.5) {
       gx = w.tx; gy = HALL_Y; // leg 2: along the hallway
@@ -375,11 +409,25 @@
     }
     // status bubble
     if (!w.moving) bubble(w, x, y - bob);
+    if (hover === w || selected === w.id || workers.size <= 8) nameTag(w, x, y - bob);
     if (hover === w) {
       ctx.strokeStyle = "#ffffff";
       ctx.lineWidth = 1;
       ctx.strokeRect(x - 2.5, y - 2.5, 13, 19);
     }
+  }
+
+  function nameTag(w, x, y) {
+    const t = label4(w);
+    ctx.font = "4px monospace";
+    ctx.textBaseline = "top";
+    const tw = ctx.measureText(t).width;
+    const tx = Math.round(x + 4 - tw / 2 - 1);
+    const ty = y + 17;
+    ctx.fillStyle = selected === w.id ? "rgba(68,147,248,.95)" : "rgba(27,22,38,.8)";
+    ctx.fillRect(tx, ty, tw + 2, 5);
+    ctx.fillStyle = "#ffffff";
+    ctx.fillText(t, tx + 1, ty + 0.5);
   }
 
   function bubble(w, x, y) {
@@ -417,11 +465,11 @@
   }
 
   function hud() {
-    const counts = { working: 0, idle: 0, done: 0 };
+    const counts = { working: 0, idle: 0, done: agents.filter((a) => a.status !== "running").length };
     for (const w of workers.values()) {
+      if (w.leaving) continue;
       if (w.mood === "working") counts.working++;
-      else if (w.mood === "done") counts.done++;
-      else counts.idle++;
+      else if (w.mood === "idle" || w.mood === "stale") counts.idle++;
     }
     r(0, 0, W, 18, "#1b1626");
     r(0, 18, W, 1, C.line);
@@ -440,8 +488,14 @@
     if (!workers.size) {
       ctx.fillStyle = "rgba(255,255,255,.8)";
       ctx.font = "6px monospace";
-      ctx.fillText("no agents yet: ask Claude to spawn some subagents", 52, 150);
+      ctx.fillText(agents.length ? "no agent working right now (tick 'show finished' to see past ones)" : "no agents yet: ask Claude to spawn some subagents", agents.length ? 30 : 52, 150);
     }
+  }
+
+  function drawDoor() {
+    r(DOOR.x - 6, H - 4, 12, 4, "#7a4a24");
+    r(DOOR.x - 5, H - 4, 10, 1, "#a8703c");
+    r(DOOR.x + 2, H - 3, 1, 1, C.amber);
   }
 
   function drawWalls() {
@@ -461,7 +515,11 @@
     drawLounge();
     drawStudio();
     drawWalls();
-    for (const w of workers.values()) step(w);
+    drawDoor();
+    for (const [id, w] of workers) {
+      step(w);
+      if (w.leaving && !w.moving) workers.delete(id);
+    }
     // depth sort: lower on screen draws later
     [...workers.values()].sort((a, b) => a.y - b.y).forEach(worker);
     hud();
@@ -492,7 +550,7 @@
     const a = w.agent;
     const recent = (a.activity || []).slice(-4).reverse()
       .map((x) => `<div>${esc(String(x.ts).slice(11, 19))} ${esc(x.tool)} ${esc(String(x.summary || "").slice(0, 70))}</div>`).join("");
-    tip.innerHTML = `<b>${esc(a.agent_type || "agent")}</b> · ${esc(MOOD[w.mood] || w.mood)} · ${esc(ROOMS[w.zone].name)}` +
+    tip.innerHTML = `<b>${esc(a.name || a.description || a.agent_type || "agent")}</b> <span style="opacity:.7">${esc(a.agent_type || "")}</span><div style="opacity:.6">klik untuk detail lengkap</div><b></b> · ${esc(MOOD[w.mood] || w.mood)} · ${esc(ROOMS[w.zone].name)}` +
       `<div class="mono">${esc(a.agent_id)}</div>` +
       (a.last_summary ? `<div>doing: ${esc(a.last_summary)}</div>` : "") +
       (recent ? `<div class="mono" style="margin-top:4px;opacity:.8">${recent}</div>` : "");
@@ -507,6 +565,14 @@
     canvas.style.cursor = hover ? "pointer" : "default";
     showTip(hover, ev);
   });
+  canvas.addEventListener("click", (ev) => {
+    const w = pick(ev);
+    if (!w) return;
+    selected = w.id;
+    if (window.openAgentDetail) window.openAgentDetail(w.id);
+    const d = document.getElementById("detail");
+    if (d) d.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
   canvas.addEventListener("mouseleave", () => {
     hover = null;
     showTip(null);
@@ -515,6 +581,10 @@
   window.pixelOffice = {
     update(list) {
       agents = Array.isArray(list) ? list : [];
+      syncWorkers();
+    },
+    setShowDone(on) {
+      showDone = !!on;
       syncWorkers();
     },
   };

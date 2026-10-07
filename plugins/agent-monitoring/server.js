@@ -13,6 +13,15 @@ const {
   loadServerInfo,
 } = require("./lib/store");
 const chat = require("./lib/chat");
+const agentinfo = require("./lib/agentinfo");
+
+// Display name: custom name set by the user, else the description given
+// when the agent was spawned (Agent tool "description"), else null.
+function withName(s, a) {
+  const names = s.names || {};
+  const meta = agentinfo.readMeta(a);
+  return { ...a, name: names[a.agent_id] || null, description: (meta && meta.description) || null };
+}
 // Prompt endpoints run tools on this machine. Allowed from loopback
 // without a token; other hosts need AGENT_MONITOR_TOKEN, sent as
 // "Authorization: Bearer <token>" or "X-Monitor-Token: <token>".
@@ -187,6 +196,16 @@ button{padding:8px 14px;border-radius:8px;border:1px solid GrayText;cursor:point
 #pixel{width:100%;image-rendering:pixelated;image-rendering:crisp-edges;border:2px solid #3b2f47;border-radius:6px;background:#cbb894;display:block}
 #pixeltip{position:absolute;display:none;max-width:270px;background:#1b1626;color:#f5f5f5;border:1px solid #7a6690;border-radius:6px;padding:8px 10px;font-size:12px;pointer-events:none;z-index:5}
 .legend{font-size:12px;opacity:.7;margin-top:6px}
+#detail{border:2px solid #4493f8;border-radius:10px;padding:12px 14px;margin-top:12px}
+.dhead{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+#detail h3{font-size:14px;margin:14px 0 6px}
+.dbox{white-space:pre-wrap;word-break:break-word;font-size:13px;border:1px solid GrayText;border-radius:8px;padding:8px 10px;max-height:220px;overflow:auto}
+.badge{font-size:11px;border-radius:10px;padding:2px 8px;background:#4493f8;color:#fff}
+.tl{border-left:3px solid GrayText;padding:4px 10px;margin:4px 0;font-size:12px}
+.tl.tool{border-color:#4493f8}.tl.err{border-color:#ef4444}.tl.text{border-color:#a371f7}
+.tl .res{opacity:.7;white-space:pre-wrap;word-break:break-word;margin-top:2px}
+#d-rename{margin-top:10px}
+.card{cursor:pointer}
 body.pixel-mode #agents{display:none}body.pixel-mode #pixelwrap{display:block}
 </style></head><body>
 <h1>&#129302; Claude Agent Monitor</h1>
@@ -203,8 +222,15 @@ body.pixel-mode #agents{display:none}body.pixel-mode #pixelwrap{display:block}
 <h2>Agents (<span id="count">0</span>)</h2>
 <div class="views"><button type="button" id="v-text">Text</button><button type="button" id="v-pixel">Pixel office</button></div>
 <div class="grid" id="agents"></div>
+<div id="detail" hidden><div class="dhead"><div><b id="d-name"></b> <span id="d-status" class="badge"></span><div class="mono" id="d-sub"></div></div>
+<button type="button" id="d-close">Close</button></div>
+<form id="d-rename"><input id="d-newname" maxlength="40" placeholder="Beri nama agent ini (kosongkan untuk reset)"><button type="submit">Save name</button></form>
+<h3>Tugas</h3><div id="d-task" class="dbox"></div>
+<h3>Yang dikerjakan (<span id="d-count">0</span>)</h3><div id="d-timeline"></div>
+<div id="d-result-wrap"><h3>Hasil akhir</h3><div id="d-result" class="dbox"></div></div></div>
 <div id="pixelwrap"><canvas id="pixel" width="320" height="200"></canvas><div id="pixeltip"></div>
-<div class="legend">Coding Lab: read/edit/think · Deploy Room: bash/build · Studio: web/content · Lounge: idle/done. Hover a worker for details.</div></div>
+<label class="legend"><input type="checkbox" id="showdone"> show finished agents</label>
+<div class="legend">Coding Lab: read/edit/think · Deploy Room: bash/build · Studio: web/content · Lounge: idle (tidak ada aktivitas 2 menit). Agent yang selesai keluar lewat pintu. Klik karakter untuk detail.</div></div>
 <h2>Live stream</h2>
 <div id="streambox" class="mono"></div>
 <h2>Recent events</h2>
@@ -230,12 +256,12 @@ async function load(){
   transports=t.transports;
   $('meta').textContent='host '+a.server.host+' · port '+a.server.port+' · up since '+a.server.started_at+' · updated '+a.server.state_updated_at+((a.server.lan_ips||[]).map(ip=>' · Network: http://'+ip+':'+a.server.port).join(''));
   $('count').textContent=a.agents.length;
-  if(window.pixelOffice)window.pixelOffice.update(a.agents);
+  if(window.pixelOffice){window.pixelOffice.setShowDone(showDone);window.pixelOffice.update(a.agents);}
   const tp=$('transports');tp.innerHTML='';
   tp.append(pill('webhook','webhook'),pill('sse','SSE stream'),pill('socketio','socket.io'));
   $('sio').textContent=a.server.socketio?'enabled':'not installed';
   $('agents').innerHTML=a.agents.map(x=>
-   \`<div class="card"><span class="dot \${x.status}"></span><b>\${x.agent_type||'agent'}</b> · \${x.status}<br><span class="mono">\${x.agent_id}</span><br><span class="mono">start: \${x.started_at||'-'}<br>stop: \${x.stopped_at||'-'}</span>\${x.last_summary?'<br><b>doing:</b> <span class="mono">'+esc(x.last_summary)+'</span>':''}\${x.files_touched&&x.files_touched.length?'<br><span class="mono">files: '+x.files_touched.slice(-3).map(esc).join(', ')+(x.files_touched.length>3?' (+'+(x.files_touched.length-3)+' more)':'')+'</span>':''}\${x.activity&&x.activity.length?'<details><summary class="mono">activity ('+x.activity.length+')</summary>'+x.activity.slice(-10).reverse().map(a=>'<div class="mono">'+a.ts.slice(11,19)+' · '+esc(a.tool)+' — '+esc(a.summary)+'</div>').join('')+'</details>':''}</div>\`).join('')||'<p>No agents recorded yet.</p>';
+   \`<div class="card" data-id="\${esc(x.agent_id)}"><span class="dot \${x.status}"></span><b>\${esc(x.name||x.description||x.agent_type||'agent')}</b> · \${x.status}<br><span class="mono">\${esc(x.agent_type||'agent')}</span><br><span class="mono">\${x.agent_id}</span><br><span class="mono">start: \${x.started_at||'-'}<br>stop: \${x.stopped_at||'-'}</span>\${x.last_summary?'<br><b>doing:</b> <span class="mono">'+esc(x.last_summary)+'</span>':''}\${x.files_touched&&x.files_touched.length?'<br><span class="mono">files: '+x.files_touched.slice(-3).map(esc).join(', ')+(x.files_touched.length>3?' (+'+(x.files_touched.length-3)+' more)':'')+'</span>':''}\${x.activity&&x.activity.length?'<details><summary class="mono">activity ('+x.activity.length+')</summary>'+x.activity.slice(-10).reverse().map(a=>'<div class="mono">'+a.ts.slice(11,19)+' · '+esc(a.tool)+' — '+esc(a.summary)+'</div>').join('')+'</details>':''}</div>\`).join('')||'<p>No agents recorded yet.</p>';
   $('events').innerHTML=e.events.map(ev=>\`<tr><td class="mono">\${ev.ts}</td><td>\${ev.type}</td><td class="mono">\${ev.agent_id}</td></tr>\`).join('');
   $('hooks').textContent=(a.webhooks||[]).join('\\n')||'(none)';
   $('err').textContent='';
@@ -279,6 +305,31 @@ async function loadApprovals(){try{const r=await (await fetch('/api/approvals?st
  $('approvals').innerHTML='';(r.approvals||[]).forEach(apprCard);renderYolo(r.yolo);}catch(e){}}
 loadApprovals();
 async function loadChatMeta(){try{const c=await (await fetch('/api/chat',{headers:chatHeaders})).json();$('chatmeta').textContent='cwd: '+c.cwd+' · mode: '+c.permission_mode+' · session: '+(c.session_id||'(new)');}catch(e){}}
+let detailId=null;
+async function openDetail(id){detailId=id;$('detail').hidden=false;
+ try{const r=await (await fetch('/api/agents/'+encodeURIComponent(id))).json();if(r.error){$('d-task').textContent=r.error;return;}
+  const a=r.agent,d=r.detail;
+  $('d-name').textContent=a.name||a.description||a.agent_type||'agent';
+  $('d-status').textContent=a.status+(a.stale?' (idle)':'');
+  $('d-sub').textContent=(a.agent_type||'agent')+' · '+a.agent_id+' · start '+(a.started_at||'-')+(a.stopped_at?' · stop '+a.stopped_at:'');
+  if(document.activeElement!==$('d-newname'))$('d-newname').value=a.name||'';
+  $('d-task').textContent=d.task||(d.description?'(prompt belum tersedia) '+d.description:'(prompt tidak tersedia: transcript agent tidak ditemukan)');
+  $('d-count').textContent=d.tool_count+' tool';
+  $('d-timeline').innerHTML=(d.truncated?'<div class="mono">… '+d.truncated+' langkah awal disembunyikan</div>':'')+d.timeline.map(t=>t.kind==='tool'
+   ?'<div class="tl tool'+(t.is_error?' err':'')+'"><span class="mono">'+esc(String(t.ts||'').slice(11,19))+'</span> <b>'+esc(t.tool)+'</b> <span class="mono">'+esc(t.input)+'</span>'+(t.result?'<div class="res mono">'+esc(t.result)+'</div>':'')+'</div>'
+   :'<div class="tl text"><span class="mono">'+esc(String(t.ts||'').slice(11,19))+'</span> '+esc(t.text)+'</div>').join('')||'<div class="mono">(belum ada aktivitas)</div>';
+  $('d-result-wrap').hidden=!d.result;$('d-result').textContent=d.result||'';
+ }catch(e){$('d-task').textContent='gagal memuat: '+e.message;}}
+$('d-close').onclick=()=>{detailId=null;$('detail').hidden=true;};
+$('d-rename').onsubmit=async ev=>{ev.preventDefault();if(!detailId)return;
+ await fetch('/api/agents/'+encodeURIComponent(detailId)+'/name',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:$('d-newname').value})});
+ $('d-newname').blur();openDetail(detailId);load();};
+$('agents').onclick=ev=>{const c=ev.target.closest('.card');if(c&&c.dataset.id)openDetail(c.dataset.id);};
+window.openAgentDetail=openDetail;
+setInterval(()=>{if(detailId&&document.activeElement!==$('d-newname'))openDetail(detailId);},4000);
+let showDone=false;try{showDone=localStorage.getItem('agentmon-showdone')==='1';}catch(e){}
+$('showdone').checked=showDone;
+$('showdone').onchange=()=>{showDone=$('showdone').checked;try{localStorage.setItem('agentmon-showdone',showDone?'1':'0');}catch(e){}if(window.pixelOffice)window.pixelOffice.setShowDone(showDone);};
 function setView(v){document.body.classList.toggle('pixel-mode',v==='pixel');$('v-text').classList.toggle('on',v!=='pixel');$('v-pixel').classList.toggle('on',v==='pixel');try{localStorage.setItem('agentmon-view',v);}catch(e){}}
 $('v-text').onclick=()=>setView('text');$('v-pixel').onclick=()=>setView('pixel');
 let savedView='pixel';try{savedView=localStorage.getItem('agentmon-view')||'pixel';}catch(e){}
@@ -320,9 +371,9 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, "text/javascript; charset=utf-8", require("fs").readFileSync(require("path").join(__dirname, "public", "pixel.js")));
     }
     if (req.method === "GET" && u.pathname === "/api/agents") {
-      const agents = Object.values(s.agents).sort((a, b) =>
-        String(b.started_at || "").localeCompare(String(a.started_at || ""))
-      );
+      const agents = Object.values(s.agents)
+        .sort((a, b) => String(b.started_at || "").localeCompare(String(a.started_at || "")))
+        .map((a) => withName(s, a));
       return json(res, 200, {
         server: {
           port: PORT,
@@ -338,6 +389,29 @@ const server = http.createServer(async (req, res) => {
         transports: s.transports,
         agents,
       });
+    }
+    // One agent: full detail from its transcript (task, every tool call
+    // with result, final answer). PUT .../name sets a display name.
+    if (u.pathname.startsWith("/api/agents/")) {
+      const parts = u.pathname.split("/");
+      const id = parts[3] || "";
+      if (!agentinfo.ID_RE.test(id)) return json(res, 400, { error: "bad agent id" });
+      const a = s.agents[id];
+      if (!a) return json(res, 404, { error: "unknown agent" });
+      if (req.method === "GET" && parts.length === 4) {
+        return json(res, 200, { agent: withName(s, a), detail: agentinfo.readDetail(a) });
+      }
+      if ((req.method === "PUT" || req.method === "POST") && parts[4] === "name" && parts.length === 5) {
+        const body = await readBody(req);
+        const name = typeof body.name === "string" ? body.name.trim().slice(0, 40) : "";
+        s.names = s.names || {};
+        if (name) s.names[id] = name;
+        else delete s.names[id];
+        saveState(s);
+        broadcast({ event: "agent.renamed", agent_id: id, name: name || null });
+        return json(res, 200, { agent_id: id, name: name || null });
+      }
+      return json(res, 405, { error: "method not allowed" });
     }
     if (req.method === "GET" && u.pathname === "/api/events") {
       const limit = Math.min(Number(u.searchParams.get("limit") || "50"), 200);
